@@ -298,6 +298,7 @@ const builtinFunctions* = [
   (name: "getLocalID", argnum: 1),
   (name: "dot", argnum: 2),
   (name: "normalize", argnum: 1),
+  (name: "abs", argnum: 1),
 ]
 
 proc toCLFunctionName*(name: string): string =
@@ -711,7 +712,7 @@ proc genKernel*(generator: Generator, node: NimNode): string =
   result = ""
   let procimpl = node.symbol.getImpl()
   # echo procimpl.repr
-  echo procimpl.treeRepr
+  # echo procimpl.treeRepr
   result &= "__kernel "
   result &= genProcDef(generator, procimpl, mangling = false)
 
