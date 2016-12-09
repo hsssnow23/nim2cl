@@ -8,5 +8,6 @@ Currently implement translate to OpenCL C.
 
 ## TODO
 - support other nim expression
+- support other builtin functions 
 - implement cpu emulator
 - other parallel languages
