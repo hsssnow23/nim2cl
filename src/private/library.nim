@@ -104,4 +104,4 @@ proc toCPUMatrix*(mat: Matrix3d): CPUMatrix =
 proc toMatrix*(mat: var CPUMatrix): Matrix =
   return mat[0].addr
 
-implGPGPUType(Matrix)
+implCLType(Matrix)

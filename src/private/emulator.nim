@@ -48,7 +48,7 @@ proc newFloat4*(x, y, z, w: float32): float4 =
 # GPGPU Type Generator
 #
 
-macro implGPGPUType*(T: typed): untyped =
+macro implCLType*(T: typed): untyped =
   result = newStmtList()
 
   let setop = !"[]="
