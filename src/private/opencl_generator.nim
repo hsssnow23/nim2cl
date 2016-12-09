@@ -736,14 +736,3 @@ macro defProgram*(name: untyped, body: untyped): untyped =
 
 template getProgram*(name: untyped): string =
   `gen name`
-
-#[
-macro pointProgram*(): untyped =
-  var tmpsrcs: seq[string] = @[]
-  var generator = newGenerator()
-  var render = bindSym("render")
-  var viewConversion = bindSym("viewConversion")
-  tmpsrcs.add(genKernel(generator, render))
-  tmpsrcs.add(genKernel(generator, viewConversion))
-  return newStrLitNode(concat(generator.toplevels, tmpsrcs).join("\n"))
-]#
