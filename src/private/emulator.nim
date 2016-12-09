@@ -45,7 +45,7 @@ proc newFloat4*(x, y, z, w: float32): float4 =
   return float4(x: x, y: y, z: z, w: w)
 
 #
-# GPGPU Type Generator
+# CL Type Generator
 #
 
 macro implCLType*(T: typed): untyped =
@@ -59,11 +59,11 @@ macro implCLType*(T: typed): untyped =
     proc `accessop`*(parray: ptr `T`, index: int): `T` =
       return cast[ptr array[0, `T`]](parray)[index]
 
-implGPGPUType(float32)
-implGPGPUType(float2)
-implGPGPUType(float3)
-implGPGPUType(float4)
-implGPGPUType(int32)
-implGPGPUType(int)
-implGPGPUType(char)
-implGPGPUType(byte)
+implCLType(float32)
+implCLType(float2)
+implCLType(float3)
+implCLType(float4)
+implCLType(int32)
+implCLType(int)
+implCLType(char)
+implCLType(byte)
