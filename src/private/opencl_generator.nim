@@ -702,6 +702,8 @@ proc gen*(generator: Generator, node: NimNode): string =
     result = genPrefix(generator, node)
   of nnkHiddenAddr:
     result = gen(generator, node[0])
+  of nnkBreakStmt:
+    result = "break"
   else:
     raise newException(GPGPULanuageError, "unsupported expression: " & node.repr & "(" & $node.kind & ")")
 
