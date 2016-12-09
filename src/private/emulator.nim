@@ -36,6 +36,8 @@ proc dot*(left: float3, right: float3): float =
   discard # TODO: dot in gpgpu emulator
 proc normalize*(vec: float3): float3 =
   discard # TODO: normalize in gpgpu emulator
+proc fabs*(x: float): float =
+  discard # TODO: fabs in gpgpu emulator
 
 proc newFloat2*(x, y: float32): float2 =
   return float2(x: x, y: y)
