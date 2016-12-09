@@ -47,6 +47,15 @@ const builtinTypeNames* = @[
   "void",
 ]
 
+const builtinFunctions* = [
+  (name: "getGlobalID", argnum: 1),
+  (name: "getLocalID", argnum: 1),
+  (name: "dot", argnum: 2),
+  (name: "normalize", argnum: 1),
+  (name: "abs", argnum: 1),
+  (name: "fabs", argnum: 1),
+]
+
 #
 # Generator
 #
@@ -292,14 +301,6 @@ proc genExternalProcCall*(generator: Generator, node: NimNode): string =
     result = genManglingCall(generator, procname, argtypes, argstrs)
     if result == nil:
       raise newException(GPGPULanuageError, "cannot call mangling proc: " & node.repr)
-
-const builtinFunctions* = [
-  (name: "getGlobalID", argnum: 1),
-  (name: "getLocalID", argnum: 1),
-  (name: "dot", argnum: 2),
-  (name: "normalize", argnum: 1),
-  (name: "abs", argnum: 1),
-]
 
 proc toCLFunctionName*(name: string): string =
   var s = ""

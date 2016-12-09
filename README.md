@@ -7,6 +7,7 @@ nim2cl is a translator from nim to computing language.
 Currently implement translate to OpenCL C.
 
 ## TODO
+- type safe kernel
 - support other nim expression
 - support other builtin functions 
 - implement cpu emulator
