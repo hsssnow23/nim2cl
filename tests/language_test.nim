@@ -1,13 +1,11 @@
 
-import unittest
-import nim2cl
-import re
-
 proc vartest() =
   var x = 1
+  x = 5
 const vartestSrc = """
 __kernel void vartest() {
   int x = 1;
+  x = 5;
 }
 """
 defProgram vartestProgram:
@@ -248,9 +246,6 @@ __kernel void templatetest() {
 """
 defProgram templatetestProgram:
   templatetest
-
-proc formatSrc(src: string): string =
-  return src[0..^3]
 
 suite "gpgpu language test":
   test "variable":

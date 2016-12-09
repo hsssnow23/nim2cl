@@ -700,6 +700,8 @@ proc gen*(generator: Generator, node: NimNode): string =
     result = genDerefExpr(generator, node)
   of nnkPrefix:
     result = genPrefix(generator, node)
+  of nnkHiddenAddr:
+    result = gen(generator, node[0])
   else:
     raise newException(GPGPULanuageError, "unsupported expression: " & node.repr & "(" & $node.kind & ")")
 
@@ -707,7 +709,7 @@ proc genKernel*(generator: Generator, node: NimNode): string =
   result = ""
   let procimpl = node.symbol.getImpl()
   # echo procimpl.repr
-  # echo procimpl.treeRepr
+  echo procimpl.treeRepr
   result &= "__kernel "
   result &= genProcDef(generator, procimpl, mangling = false)
 
