@@ -195,6 +195,8 @@ proc getTypeNameInside*(generator: Generator, node: NimNode): TypeInfo =
       return "__constant " & getTypeNameInside(generator, t[1]).name
     of "typeDesc":
       return getTypeNameInside(generator, t[1])
+    of "var":
+      return getTypeNameInside(generator, t[1])
     else:
       raise newException(GPGPULanuageError, "unsupported bracket type: " & t.repr)
   elif t.kind == nnkPtrTy:
