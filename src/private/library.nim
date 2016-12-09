@@ -56,22 +56,22 @@ proc print*(vec: float3) =
 proc print*(vec: float4) =
   echo "x:", vec.x, ",y:", vec.y, ",z:", vec.z, ",w:", vec.w
 
-proc float3*(color: Color): float3 =
+proc toFloat3*(color: Color): float3 =
   let (r, g, b) = color.extractRGB()
   return newFloat3(r.float32 / 255.0'f32, g.float32 / 255.0'f32, b.float32 / 255.0'f32)
 
-proc float3*(vec: Vector3d): float3 =
+proc toFloat3*(vec: Vector3d): float3 =
   return newFloat3(vec.x.float32, vec.y.float32, vec.z.float32)
 
 proc toFloat3Array*(data: seq[Color]): seq[float3] =
   result = @[]
   for c in data:
-    result.add(c.float3)
+    result.add(c.toFloat3)
 
 proc toFloat3Array*(data: seq[Vector3d]): seq[float3] =
   result = @[]
   for v in data:
-    result.add(v.float3)
+    result.add(v.toFloat3)
 
 #
 # Matrix
