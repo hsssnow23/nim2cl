@@ -226,6 +226,8 @@ proc genStmtListInside*(generator: Generator, body: NimNode): string =
         s &= genStmtListInside(generator, b) & generator.newline()
       elif b.kind == nnkDiscardStmt:
         discard
+      elif b.kind == nnkCommentStmt:
+        discard
       else:
         s &= generator.indent() & gen(generator, b) & ";" & generator.newline()
       result &= generator.expand() & s 
@@ -704,8 +706,6 @@ proc gen*(generator: Generator, node: NimNode): string =
     result = genBracket(generator, node)
   of nnkBracketExpr:
     result = genBracketExpr(generator, node)
-  # of nnkStmtListExpr:
-  #   result = gen(generator, node[1])
   of nnkDerefExpr:
     result = genDerefExpr(generator, node)
   of nnkPrefix:
