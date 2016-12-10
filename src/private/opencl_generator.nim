@@ -54,6 +54,7 @@ const builtinFunctions* = [
   (name: "normalize", argnum: 1),
   (name: "abs", argnum: 1),
   (name: "fabs", argnum: 1),
+  (name: "sqrt", argnum: 1),
 ]
 
 #
