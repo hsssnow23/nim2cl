@@ -89,7 +89,7 @@ proc genSym*(generator: Generator, name: string): string =
   generator.count += 1
 proc expand*(generator: Generator): string =
   if generator.prev.len >= 1:
-    result = generator.indent() & generator.prev[^1]
+    result = generator.prev[^1]
     generator.prev = generator.prev[0..^2]
   else:
     result = ""
@@ -242,6 +242,13 @@ proc genStmtList*(generator: Generator, body: NimNode): string =
   generator.inc()
   result = genStmtListInside(generator, body)
   generator.dec()
+
+proc genPrevStmtList*(generator: Generator, node: NimNode): string =
+  var body = newStmtList()
+  for i in 0..<node.len-1:
+    body.add(node[i])
+  generator.prev.add(genStmtListInside(generator, body))
+  return gen(generator, node[^1])
 
 proc genIdent*(generator: Generator, node: NimNode): string =
   return $node
@@ -626,7 +633,7 @@ proc genObjConstr*(generator: Generator, node: NimNode): string =
   discard genObjectTy(generator, node[0], $node[0])
   var tmp = generator.genSym("tmp")
   var prev = ""
-  prev &= "$# $#;" % [$node[0], tmp] & generator.newline()
+  prev &= generator.indent() & "$# $#;" % [$node[0], tmp] & generator.newline()
   for i in 1..<node.len:
     prev &= generator.indent() & genObjField(generator, node[i], tmp) & generator.newline()
   generator.prev.add(prev)
@@ -697,8 +704,8 @@ proc gen*(generator: Generator, node: NimNode): string =
     result = genBracket(generator, node)
   of nnkBracketExpr:
     result = genBracketExpr(generator, node)
-  of nnkStmtListExpr:
-    result = gen(generator, node[1])
+  # of nnkStmtListExpr:
+  #   result = gen(generator, node[1])
   of nnkDerefExpr:
     result = genDerefExpr(generator, node)
   of nnkPrefix:
@@ -707,6 +714,8 @@ proc gen*(generator: Generator, node: NimNode): string =
     result = gen(generator, node[0])
   of nnkBreakStmt:
     result = "break"
+  of nnkStmtList, nnkStmtListExpr:
+    result = genPrevStmtList(generator, node)
   else:
     raise newException(GPGPULanuageError, "unsupported expression: " & node.repr & "(" & $node.kind & ")")
 

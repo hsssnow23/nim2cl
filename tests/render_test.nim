@@ -1,4 +1,11 @@
 
+import unittest
+import nim2cl
+import re
+
+proc formatSrc(src: string): string =
+  return src[0..^3]
+
 proc render*(
   dest: Global[ptr float4], width: int, height: int
 ) =

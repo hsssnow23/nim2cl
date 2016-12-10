@@ -1,4 +1,11 @@
 
+import unittest
+import nim2cl
+import re
+
+proc formatSrc(src: string): string =
+  return src[0..^3]
+
 proc vartest() =
   var x = 1
   x = 5
@@ -233,19 +240,39 @@ __kernel void attrtest(__global int a, __local int b, __private int c, __constan
 defProgram attrtestProgram:
   attrtest
 
-template add5(a: typed) =
-  a += 5
+proc isZero*(vec: float3): bool =
+  if abs(vec.x) < 0.001 and abs(vec.y) < 0.001 and abs(vec.z) < 0.001:
+    return true
+  else:
+    return false
+template newV(): float3 =
+  var v = newFloat3(0.0, 0.0, 0.0)
+  if not v.isZero:
+    v = v.normalize()
+  v
 proc templatetest() =
-  var a = 0
-  add5(a)
-const templatetestSrc = """
+  var f = newV()
+defProgram templateProgram:
+  templatetest
+const templateSrc = """
+bool isZero_gensym_0(float3 vec) {
+  bool result;
+  if ((((abs(vec.x) < 0.001f) && (abs(vec.y) < 0.001f)) && (abs(vec.z) < 0.001f))) {
+    result = 1;
+    return result;
+  } else {
+    result = 0;
+    return result;
+  };
+}
 __kernel void templatetest() {
-  int a = 0;
-  (a += 5);
+  float3 v = (float3)(0.0f, 0.0f, 0.0f);
+  if (!(isZero_gensym_0(v))) {
+    v = normalize(v);
+  };
+  float3 f = v;
 }
 """
-defProgram templatetestProgram:
-  templatetest
 
 suite "gpgpu language test":
   test "variable":
@@ -277,4 +304,4 @@ suite "gpgpu language test":
   test "attribute":
     check getProgram(attrtestProgram) == formatSrc(attrtestSrc)
   test "template":
-    check getProgram(templatetestProgram) == formatSrc(templatetestSrc)
+    check getProgram(templateProgram) == formatSrc(templateSrc)
