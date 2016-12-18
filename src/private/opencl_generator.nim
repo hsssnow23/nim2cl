@@ -12,15 +12,21 @@ type
     indentNum*: int
     indentSize*: int
     isFormat*: bool
-    toplevels*: seq[string]
-    manglings*: Table[string, seq[OverloadProc]]
-    objects*: Table[string, bool]
+
+    toplevels*: seq[string] # store struct and external function
+
+    objects*: Table[string, bool] # for object
+    procs*: Table[string, seq[OverloadProc]] # for object
+    variables*: Table[string, string] # for template variable
+
     isReturn*: bool
-    prev*: seq[string]
-    count*: int
-    tmpinfo*: tuple[s: string, e: string]
-    iinfo*: string
-    isInTmpStmt*: bool 
+    prevStmts*: seq[string] # for nnkObjConstr and etc...
+
+    count*: int # for gensym
+    tmpinfo*: tuple[s: string, e: string] # for while and `for` stmts
+    iinfo*: string # for while and `for` stmts
+    isInTmpStmt*: bool # for while and `for` stmts
+
   OverloadProc* = object
     types*: seq[string]
     manglingname*: string
@@ -62,11 +68,24 @@ const builtinFunctions* = [
 #
 
 proc newGenerator*(indentSize = 2, isFormat = true): Generator =
-  return Generator(
-    indentNum: 0, indentSize: indentSize, isFormat: isFormat,
-    toplevels: @[], manglings: initTable[string, seq[OverloadProc]](), objects: initTable[string, bool](),
-    isReturn: false, prev: @[], count: 0, tmpinfo: (s: nil, e: nil), iinfo: nil, isInTmpStmt: false
-  )
+  result = Generator()
+  result.indentNum = 0
+  result.indentSize = indentSize
+  result.isFormat = isFormat
+
+  result.toplevels = @[]
+
+  result.procs = initTable[string, seq[OverloadProc]]()
+  result.objects = initTable[string, bool]()
+  result.variables = initTable[string, string]()
+
+  result.isReturn = false
+  result.prevStmts = @[]
+  result.count = 0
+  result.tmpinfo = (s: nil, e: nil)
+  result.iinfo = nil
+  result.isIntmpStmt = false
+
 proc indent*(generator: Generator): string =
   if generator.isFormat:
     return repeat(" ", generator.indentSize).repeat(generator.indentNum)
@@ -88,26 +107,26 @@ proc genSym*(generator: Generator, name: string): string =
     result = "operator_gensym_" & $generator.count
   generator.count += 1
 proc expand*(generator: Generator): string =
-  if generator.prev.len >= 1:
-    result = generator.prev[^1]
-    generator.prev = generator.prev[0..^2]
+  if generator.prevStmts.len >= 1:
+    result = generator.prevStmts[^1]
+    generator.prevStmts = generator.prevStmts[0..^2]
   else:
     result = ""
 template newProc*(generator: Generator, body: untyped) =
   var tmpIndentNum = generator.indentNum
   var tmpReturn = generator.isReturn
-  var tmpPrev = generator.prev
+  var tmpPrevStmts = generator.prevStmts
   var tmpTmpInfo = generator.tmpinfo
   var tmpiinfo = generator.iinfo
   generator.indentNum = 0
   generator.isReturn = false
-  generator.prev = @[]
+  generator.prevStmts = @[]
   generator.tmpinfo = (s: nil, e: nil)
   generator.iinfo = nil
   body
   generator.indentNum = tmpIndentNum
   generator.isReturn = tmpReturn
-  generator.prev = tmpPrev
+  generator.prevStmts = tmpPrevStmts
   generator.tmpinfo = tmpTmpInfo
   generator.iinfo = tmpiinfo
 template newIndent*(generator: Generator, body: untyped) =
@@ -249,7 +268,7 @@ proc genPrevStmtList*(generator: Generator, node: NimNode): string =
   var body = newStmtList()
   for i in 0..<node.len-1:
     body.add(node[i])
-  generator.prev.add(genStmtListInside(generator, body))
+  generator.prevStmts.add(genStmtListInside(generator, body))
   return gen(generator, node[^1])
 
 proc genIdent*(generator: Generator, node: NimNode): string =
@@ -278,7 +297,10 @@ proc genSymbol*(generator: Generator, node: NimNode): string =
   if generator.isInTmpStmt:
     result = genTmpSym(generator, node)
   else:
-    result = $node
+    if generator.variables.hasKey($node):
+      return generator.variables[$node]
+    else:
+      result = $node
 
 proc equals*(left: seq[string], right: seq[string]): bool =
   if left.len != right.len:
@@ -289,8 +311,8 @@ proc equals*(left: seq[string], right: seq[string]): bool =
   return true
 
 proc genManglingCall*(generator: Generator, procname: string, argtypes: seq[string], argstrs: seq[string]): string =
-  if generator.manglings.hasKey(procname):
-    for overloaded in generator.manglings[procname]:
+  if generator.procs.hasKey(procname):
+    for overloaded in generator.procs[procname]:
       if equals(argtypes, overloaded.types): 
         return overloaded.manglingname & "(" & argstrs.join(", ") & ")"
   return nil
@@ -406,7 +428,13 @@ proc genVarSection*(generator: Generator, node: NimNode): string =
   if t.name == "bool":
     t.name = "int"
 
-  result &= t.genTypeDecl($node[0][0])
+  if generator.variables.hasKey($node[0][0]):
+    var sym = generator.genSym($node[0][0])
+    result &= t.genTypeDecl(sym)
+    generator.variables[$node[0][0]] = sym
+  else:
+    result &= t.genTypeDecl($node[0][0])
+    generator.variables[$node[0][0]] = $node[0][0]
 
   if node[0][2].kind != nnkEmpty:
     result &= " = "
@@ -512,9 +540,9 @@ proc genProcDef*(generator: Generator, node: NimNode, mangling = true): string =
     argtypes.add(getTypeNameInside(generator, node[3][i][1]).genTypeDecl("mangling"))
 
   # register mangling name to generator
-  if not generator.manglings.hasKey(procname):
-    generator.manglings[procname] = @[]
-  generator.manglings[procname].add(OverloadProc(types: argtypes, manglingname: manglingname))
+  if not generator.procs.hasKey(procname):
+    generator.procs[procname] = @[]
+  generator.procs[procname].add(OverloadProc(types: argtypes, manglingname: manglingname))
 
   # gen decl
   result &= "$# $#($#)" % [procret.name, manglingname, argsstr.join(", ")]
@@ -649,7 +677,7 @@ proc genObjConstr*(generator: Generator, node: NimNode): string =
   prev &= generator.indent() & "$# $#;" % [$node[0], tmp] & generator.newline()
   for i in 1..<node.len:
     prev &= generator.indent() & genObjField(generator, node[i], tmp) & generator.newline()
-  generator.prev.add(prev)
+  generator.prevStmts.add(prev)
   return tmp
 
 proc genDotExpr*(generator: Generator, node: NimNode): string =

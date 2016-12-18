@@ -62,7 +62,7 @@ __kernel void iftest() {
   if (1) {
     float f = 1.0f;
   } else {
-    float f = 2.0f;
+    float f_gensym_0 = 2.0f;
   };
 }
 """
@@ -251,7 +251,8 @@ template newV(): float3 =
     v = v.normalize()
   v
 proc templatetest() =
-  var f = newV()
+  var f1 = newV()
+  var f2 = newV()
 defProgram templateProgram:
   templatetest
 const templateSrc = """
@@ -270,9 +271,16 @@ __kernel void templatetest() {
   if (!(isZero_gensym_0(v))) {
     v = normalize(v);
   };
-  float3 f = v;
+  float3 f1 = v;
+  float3 v_gensym_1 = (float3)(0.0f, 0.0f, 0.0f);
+  if (!(isZero_gensym_0(v_gensym_1))) {
+    v_gensym_1 = normalize(v_gensym_1);
+  };
+  float3 f2 = v_gensym_1;
 }
 """
+
+
 
 suite "gpgpu language test":
   test "variable":
