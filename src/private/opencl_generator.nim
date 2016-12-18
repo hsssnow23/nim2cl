@@ -681,7 +681,7 @@ proc genObjConstr*(generator: Generator, node: NimNode): string =
   return tmp
 
 proc genDotExpr*(generator: Generator, node: NimNode): string =
-  return "$#.$#" % [gen(generator, node[0]), gen(generator, node[1])]
+  return "$#.$#" % [gen(generator, node[0]), $node[1]]
 
 proc genBracket*(generator: Generator, node: NimNode): string =
   var args: seq[string] = @[]
