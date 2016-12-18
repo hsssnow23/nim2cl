@@ -289,12 +289,12 @@ proc genTmpSym*(generator: Generator, node: NimNode): string =
       result = generator.iinfo
       # generator.iinfo = nil
     else:
-      if generator.variables.hasKey($node):
-        return generator.variables[$node]
-      else:
-        result = "i"
+      result = "i"
   else:
-    result = $node
+    if generator.variables.hasKey($node):
+      return generator.variables[$node]
+    else:
+      result = $node
 
 proc genSymbol*(generator: Generator, node: NimNode): string =
   if generator.isInTmpStmt:
