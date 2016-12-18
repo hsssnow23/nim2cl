@@ -48,13 +48,13 @@ const builtinTypeNames* = @[
 ]
 
 const builtinFunctions* = [
-  (name: "getGlobalID", argnum: 1),
-  (name: "getLocalID", argnum: 1),
-  (name: "dot", argnum: 2),
-  (name: "normalize", argnum: 1),
-  (name: "abs", argnum: 1),
-  (name: "fabs", argnum: 1),
-  (name: "sqrt", argnum: 1),
+  (name: "getGlobalID", args: @["int"], raw: "get_global_id"),
+  (name: "getLocalID", args: @["int"], raw: "get_local_id"),
+  (name: "dot", args: @["float3", "float3"], raw: "dot"),
+  (name: "normalize", args: @["float3"], raw: "normalize"),
+  (name: "abs", args: @["int"], raw: "abs"),
+  (name: "abs", args: @["float"], raw:"fabs"),
+  (name: "sqrt", args: @["float"], raw: "sqrt"),
 ]
 
 #
@@ -280,7 +280,7 @@ proc genSymbol*(generator: Generator, node: NimNode): string =
   else:
     result = $node
 
-proc equalTypes*(left: seq[string], right: seq[string]): bool =
+proc equals*(left: seq[string], right: seq[string]): bool =
   if left.len != right.len:
     return false
   for i in 0..<left.len:
@@ -291,7 +291,7 @@ proc equalTypes*(left: seq[string], right: seq[string]): bool =
 proc genManglingCall*(generator: Generator, procname: string, argtypes: seq[string], argstrs: seq[string]): string =
   if generator.manglings.hasKey(procname):
     for overloaded in generator.manglings[procname]:
-      if equalTypes(argtypes, overloaded.types): 
+      if equals(argtypes, overloaded.types): 
         return overloaded.manglingname & "(" & argstrs.join(", ") & ")"
   return nil
 
@@ -324,6 +324,33 @@ proc toCLFunctionName*(name: string): string =
       isPrevLower = true
   return s
 
+proc genEcho*(generator: Generator, node: NimNode): string =
+  result = ""
+  result &= "printf(\""
+  var args = ""
+  for i in 0..<node[1].len:
+    let curnode = node[1][i]
+    case curnode.kind
+    of nnkStrLit:
+      result &= curnode.strval
+    of nnkHiddenCallConv:
+      let typ = getTypeName(generator, curnode[1])
+      case typ.name
+      of "float":
+        result &= "%f"
+      of "double":
+        result &= "%f"
+      of "int":
+        result &= "%i"
+      else:
+        raise newException(GPGPULanuageError, "unsupported echo type ($#)" % typ.name)
+      args &= ", " & gen(generator, curnode[1])
+    else:
+      raise newException(GPGPULanuageError, "unsupported echo type: $# ($#)" % [curnode.repr, $curnode.kind])
+  result &= "\""
+  result &= args
+  result &= ")"
+
 proc genCall*(generator: Generator, node: NimNode): string =
   case $node[0]
   of "[]=":
@@ -337,40 +364,24 @@ proc genCall*(generator: Generator, node: NimNode): string =
   of "newFloat4":
     result = "(float4)($#, $#, $#, $#)" % [generator.gen(node[1]), generator.gen(node[2]), generator.gen(node[3]), generator.gen(node[4])]
   of "echo":
-    result = ""
-    result &= "printf(\""
-    var args = ""
-    for i in 0..<node[1].len:
-      let curnode = node[1][i]
-      case curnode.kind
-      of nnkStrLit:
-        result &= curnode.strval
-      of nnkHiddenCallConv:
-        let typ = getTypeName(generator, curnode[1])
-        case typ.name
-        of "float":
-          result &= "%f"
-        of "double":
-          result &= "%f"
-        of "int":
-          result &= "%i"
-        else:
-          raise newException(GPGPULanuageError, "unsupported echo type ($#)" % typ.name)
-        args &= ", " & gen(generator, curnode[1])
-      else:
-        raise newException(GPGPULanuageError, "unsupported echo type: $# ($#)" % [curnode.repr, $curnode.kind])
-    result &= "\""
-    result &= args
-    result &= ")"
+    result = genEcho(generator, node)
   of "inc":
     result = "$# += $#" % [genTmpSym(generator, node[1]), gen(generator, node[2])]
   else:
     for bf in builtinFunctions:
-      if bf.name == $node[0]:
+      # get arg types
+      var args = newSeq[string]()
+      for i in 1..<node.len:
+        args.add(getTypeName(generator, node[i]).name)
+
+      # if match builtin function
+      if bf.name == $node[0] and equals(args, bf.args):
         var arggen = newSeq[string]()
-        for i in 1..bf.argnum:
+        for i in 1..<node.len:
           arggen.add(gen(generator, node[i]))
-        return "$#($#)" % [bf.name.toCLFunctionName(), arggen.join(", ")]
+        return "$#($#)" % [bf.raw, arggen.join(", ")]
+
+    # others
     result = genExternalProcCall(generator, node)
 
 proc genFloatLit*(generator: Generator, node: NimNode): string =

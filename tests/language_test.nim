@@ -257,7 +257,7 @@ defProgram templateProgram:
 const templateSrc = """
 bool isZero_gensym_0(float3 vec) {
   bool result;
-  if ((((abs(vec.x) < 0.001f) && (abs(vec.y) < 0.001f)) && (abs(vec.z) < 0.001f))) {
+  if ((((fabs(vec.x) < 0.001f) && (fabs(vec.y) < 0.001f)) && (fabs(vec.z) < 0.001f))) {
     result = 1;
     return result;
   } else {
