@@ -289,7 +289,10 @@ proc genTmpSym*(generator: Generator, node: NimNode): string =
       result = generator.iinfo
       # generator.iinfo = nil
     else:
-      result = "i"
+      if generator.variables.hasKey($node):
+        return generator.variables[$node]
+      else:
+        result = "i"
   else:
     result = $node
 
