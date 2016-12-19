@@ -462,6 +462,46 @@ proc genIfStmt*(generator: Generator, node: NimNode): string =
       result &= genStmtList(generator, node[i][0])
       result &= generator.indent() & "}"
 
+proc genIfExprBody*(generator: Generator, node: NimNode, tmpname: string): string =
+  result = ""
+  if node.kind == nnkStmtList:
+    var body = newStmtList()
+    for i in 0..<node.len-1:
+      body.add(node[i])
+    result &= genStmtList(generator, body)
+    generator.inc()
+    result &= generator.indent() & "$# = $#;" % [tmpname, gen(generator, node[^1])] & generator.newline()
+    generator.dec()
+  else:
+    generator.inc()
+    result &= generator.indent() & "$# = $#;" % [tmpname, gen(generator, node)] & generator.newline()
+    generator.dec()
+
+proc genIfExpr*(generator: Generator, node: NimNode): string =
+  var s = ""
+  # echo node.treerepr
+  var tmpname = generator.genSym("tmp")
+  if node[0][1].kind == nnkStmtList:
+    s &= generator.indent() & getTypeName(generator, node[0][1][^1]).genTypeDecl(tmpname) & ";" & generator.newline()
+  else:
+    s &= generator.indent() & getTypeName(generator, node[0][1]).genTypeDecl(tmpname) & ";" & generator.newline()
+  s &= generator.indent()
+  s &= "if ($#)" % gen(generator, node[0][0])
+  s &= " {" & generator.newline()
+  s &= genIfExprBody(generator, node[0][1], tmpname)
+  s &= generator.indent() & "}"
+  for i in 1..<node.len:
+    if node[i].kind == nnkElifBranch:
+      s &= " else if ($#) {" % gen(generator, node[i][0]) & generator.newline()
+      s &= genIfExprbody(generator, node[i][1], tmpname)
+      s &= generator.indent() & "}" & generator.newline()
+    else:
+      s &= " else {" & generator.newline()
+      s &= genIfExprBody(generator, node[i][0], tmpname)
+      s &= generator.indent() & "}" & generator.newline()
+  generator.prevStmts.add(s)
+  return tmpname
+
 proc genConv*(generator: Generator, node: NimNode): string =
   let typ = node[0]
   let value = node[1]
@@ -526,7 +566,6 @@ proc genArg*(generator: Generator, arg: NimNode): string =
   result = ""
   let name = arg[0]
   let typ = arg[1]
-  # result &= genAttributeName(generator, typ)
   result &= getTypeNameInside(generator, typ).genTypeDecl($name)
 
 proc genProcDef*(generator: Generator, node: NimNode, mangling = true): string =
@@ -542,8 +581,15 @@ proc genProcDef*(generator: Generator, node: NimNode, mangling = true): string =
   var argsstr: seq[string] = @[]
   var argtypes: seq[string] = @[]
   for i in 1..<node[3].len:
-    argsstr.add(genArg(generator, node[3][i]))
-    argtypes.add(getTypeNameInside(generator, node[3][i][1]).genTypeDecl("mangling"))
+    let arg = node[3][i]
+    if arg.len >= 4:
+      let typ = arg[^2]
+      for i in 0..<arg.len-2:
+        argsstr.add(getTypeNameInside(generator, typ).genTypeDecl($arg[i]))
+        argtypes.add(getTypeNameInside(generator, typ).genTypeDecl("mangling"))
+    else:
+      argsstr.add(genArg(generator, node[3][i]))
+      argtypes.add(getTypeNameInside(generator, node[3][i][1]).genTypeDecl("mangling"))
 
   # register mangling name to generator
   if not generator.procs.hasKey(procname):
@@ -723,6 +769,8 @@ proc gen*(generator: Generator, node: NimNode): string =
     result = genIntLit(generator, node)
   of nnkIfStmt:
     result = genIfStmt(generator, node)
+  of nnkIfExpr:
+    result = genIfExpr(generator, node)
   of nnkConv, nnkHiddenStdConv:
     result = genConv(generator, node)
   of nnkInfix:
