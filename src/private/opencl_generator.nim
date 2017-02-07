@@ -3,10 +3,13 @@ import macros
 import strutils, sequtils
 import tables, hashes
 
+proc openclbuiltin*(name: string = nil) = discard
+
 type
   ManglingIndex* = object
     procname*: string
     argtypes*: seq[string]
+    isbuiltin*: bool
   Generator* = ref object
     indentwidth*: int
     currentindentnum*: int
@@ -69,9 +72,12 @@ proc format*(generator: Generator, s: string): string =
     result = result.replace("$n", "")
 
 proc genManglingName*(generator: Generator, manglingindex: ManglingIndex): string =
-  result = manglingindex.procname & "_" & manglingindex.argtypes.join("_") & "_" & $generator.manglingcount
-  generator.manglingprocs[manglingindex] = result
-  generator.manglingcount += 1
+  if generator.manglingprocs.hasKey(manglingindex):
+    result = generator.manglingprocs[manglingindex]
+  else:
+    result = manglingindex.procname & "_" & manglingindex.argtypes.join("_") & "_" & $generator.manglingcount
+    generator.manglingprocs[manglingindex] = result
+    generator.manglingcount += 1
 
 proc newCompSrc*(generator: Generator): CompSrc =
   result.generator = generator
@@ -250,7 +256,8 @@ proc genSym*(generator: Generator, n: NimNode, r: var CompSrc) =
       generator.reset:
         var proccomp = newCompSrc(generator)
         genProcDef(generator, impl, proccomp, mangling = true)
-        generator.dependsrcs.add($proccomp)
+        if $proccomp != "":
+          generator.dependsrcs.add($proccomp)
         r &= genManglingName(generator, manglingindex)
   else:
     r &= $n
@@ -313,7 +320,18 @@ proc genResultEnd*(generator: Generator, n: NimNode, r: var CompSrc) =
     generator.indent:
       r &= "$ireturn result;$n"
 
+proc genBuiltinProc*(generator: Generator, n: NimNode, r: var CompSrc) =
+  let first = if n.body.kind == nnkStmtList: n.body[0] else: n.body
+  let builtinname = if first.len == 1: $n[0] else: first[1].strval
+  var manglingindex = getManglingIndex(n)
+  generator.manglingprocs[manglingindex] = builtinname
+
 proc genProcDef*(generator: Generator, n: NimNode, r: var CompSrc, isKernel = false, mangling = false) =
+  let first = if n.body.kind == nnkStmtList: n.body[0] else: n.body
+  if first.kind == nnkCall and $first[0] == "openclbuiltin":
+    genBuiltinProc(generator, n, r)
+    return
+
   if isKernel:
     r &= "__kernel "
   genRetType(generator, n[3], r)

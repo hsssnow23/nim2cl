@@ -1,6 +1,7 @@
 
 import macros, macro_utils
 import strutils
+import opencl_generator
 
 type
   float2* = object
@@ -29,8 +30,10 @@ var currentGlobalID = @[0]
 var currentLocalID = @[0]
 
 proc getGlobalID*(index: int): int =
+  openclbuiltin("get_global_id")
   return currentGlobalID[index]
 proc getLocalID*(index: int): int =
+  openclbuiltin("get_local_id")
   return currentLocalID[index]
 proc dot*(left: float3, right: float3): float =
   discard # TODO: dot in gpgpu emulator

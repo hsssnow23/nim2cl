@@ -39,7 +39,7 @@ float add5_float_0(float x) {
   return result;
 }
 __kernel void proctest() {
-  add5_float_1(1.0);
+  add5_float_0(1.0);
 }"""
 
 proc convtest() =
@@ -51,13 +51,20 @@ float add5_float_0(float x) {
   return result;
 }
 __kernel void convtest() {
-  add5_float_1(1.0);
+  add5_float_0(1.0);
 }"""
 
 proc ptrtest(vals: global[ptr float]) =
   discard
 const ptrtestSrc = """
 __kernel void ptrtest(__global float* vals) {
+}"""
+
+proc builtintest() =
+  let i = getGlobalID(0)
+const builtinSrc = """
+__kernel void builtintest() {
+  int i = get_global_id(0);
 }"""
 
 suite "nim2cl basic test":
@@ -71,3 +78,5 @@ suite "nim2cl basic test":
     check genCLKernelSource(convtest) == convtestSrc
   test "ptr":
     check genCLKernelSource(ptrtest) == ptrtestSrc
+  test "builtin":
+    check genCLKernelSource(builtintest) == builtinSrc
