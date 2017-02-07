@@ -2,9 +2,6 @@
 import unittest
 import nim2cl
 
-proc formatSrc(src: string): string =
-  return src[0..^3]
-
 proc vartest() =
   var x = 1
   x = 5
@@ -20,16 +17,15 @@ proc fortest() =
 const fortestSrc = """
 __kernel void fortest() {
   {
-      ;
     int i = 0;
     {
-    while ((i < 10)) {
-      i = i;
-      int a = i;
-      i += 1;
+      while ((i < 10)) {
+        i = i;
+        int a = i;
+        i += 1;
+      }
     }
-    };
-  };
+  }
 }"""
 
 proc add5(x: float): float =
@@ -46,6 +42,24 @@ __kernel void proctest() {
   add5_float_1(1.0);
 }"""
 
+proc convtest() =
+  discard add5(1.0).float32
+const convtestSrc = """
+float add5_float_0(float x) {
+  float result;
+  result = (x + 5.0);
+  return result;
+}
+__kernel void convtest() {
+  add5_float_1(1.0);
+}"""
+
+proc ptrtest(vals: global[ptr float]) =
+  discard
+const ptrtestSrc = """
+__kernel void ptrtest(__global float* vals) {
+}"""
+
 suite "nim2cl basic test":
   test "var":
     check genCLKernelSource(vartest) == vartestSrc
@@ -53,3 +67,7 @@ suite "nim2cl basic test":
     check genCLKernelSource(fortest) == fortestSrc
   test "external proc":
     check genCLKernelSource(proctest) == proctestSrc
+  test "conv":
+    check genCLKernelSource(convtest) == convtestSrc
+  test "ptr":
+    check genCLKernelSource(ptrtest) == ptrtestSrc

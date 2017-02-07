@@ -82,19 +82,40 @@ proc `&=`*(comp: var CompSrc, s: string) =
 
 proc `$`*(comp: CompSrc): string = comp.src
 
+proc semicolon*(comp: var CompSrc) =
+  let last = comp.src[^1]
+  if comp.src.len > 0 and last != ';' and last != '}' and last != '{':
+    comp &= ";"
+
 #
 # generate from NimNode
 #
 
 proc gen*(generator: Generator, n: NimNode, r: var CompSrc)
+proc genStmtListInside*(generator: Generator, n: NimNode, r: var CompSrc)
+proc genStmtList*(generator: Generator, n: NimNode, r: var CompSrc)
 proc genProcDef*(generator: Generator, n: NimNode, r: var CompSrc, isKernel = false, mangling = false)
 
 proc genType*(t: NimNode): string =
   if t.kind == nnkEmpty:
     result = "void"
+  elif t.kind == nnkPtrTy:
+    result = t[0].repr & "*"
+  elif t.kind == nnkBracketExpr:
+    case $t[0]
+    of "global":
+      result = "__global " & genType(t[1])
+    of "local":
+      result = "__local " & genType(t[1])
+    of "private":
+      result = "__private " & genType(t[1])
+    of "constant":
+      result = "__constant " & genType(t[1])
+    else:
+      result = t.repr
   else:
     result = t.repr
-proc genTypeFromval*(t: NimNode): string =
+proc genTypeFromVal*(t: NimNode): string =
   return genType(getTypeInst(t))
 
 proc genLetSection*(generator: Generator, n: NimNode, r: var CompSrc) =
@@ -174,8 +195,12 @@ proc genWhileStmt*(generator: Generator, n: NimNode, r: var CompSrc) =
 
 proc genBlockStmt*(generator: Generator, n: NimNode, r: var CompSrc) =
   r &= "{$n"
-  r &= "$i"
-  gen(generator, n[1], r)
+  generator.indent:
+    if n[1].kind == nnkStmtList:
+      genStmtListInside(generator, n[1], r)
+    else:
+      r &= "$i"
+      gen(generator, n[1], r)
   r &= "$i}"
 
 proc genStmtListInside*(generator: Generator, n: NimNode, r: var CompSrc) =
@@ -183,9 +208,13 @@ proc genStmtListInside*(generator: Generator, n: NimNode, r: var CompSrc) =
     if e.kind == nnkStmtList:
       genStmtListInside(generator, e, r)
     else:
-      r &= "$i"
-      gen(generator, e, r)
-      r &= ";$n"
+      var comp = newCompSrc(generator)
+      gen(generator, e, comp)
+      if $comp != "":
+        r &= "$i"
+        r &= $comp
+        r.semicolon()
+        r &= "$n"
 
 proc genStmtList*(generator: Generator, n: NimNode, r: var CompSrc) =
   generator.indent:
@@ -226,6 +255,9 @@ proc genSym*(generator: Generator, n: NimNode, r: var CompSrc) =
   else:
     r &= $n
 
+proc genConv*(generator: Generator, n: NimNode, r: var CompSrc) =
+  gen(generator, n[1], r)
+
 proc genDiscardStmt*(generator: Generator, n: NimNode, r: var CompSrc) =
   if n.len == 1:
     gen(generator, n[0], r)
@@ -243,6 +275,7 @@ proc gen*(generator: Generator, n: NimNode, r: var CompSrc) =
   of nnkIntLit: genIntLit(generator, n, r)
   of nnkFloatLit, nnkFloat64Lit: genFloatLit(generator, n, r)
   of nnkSym: genSym(generator, n, r)
+  of nnkConv, nnkHiddenStdConv: genConv(generator, n, r)
   of nnkDiscardStmt: genDiscardStmt(generator, n, r)
   of nnkCommentStmt, nnkEmpty: discard
   else:
@@ -297,10 +330,8 @@ proc genProcDef*(generator: Generator, n: NimNode, r: var CompSrc, isKernel = fa
   if n.body.kind == nnkStmtList:
     genStmtList(generator, n.body, r)
   else:
-    generator.indent:
-      r &= "$i"
-      gen(generator, n.body, r)
-      r &= ";$n"
+    let newbody = newStmtList(n.body)
+    genStmtList(generator, newbody, r)
   genResultEnd(generator, n[3][0], r)
   r &= "}"
 
@@ -316,19 +347,3 @@ macro genCLKernelSource*(procname: typed): untyped =
   var srcs = generator.dependsrcs
   srcs.add($comp)
   result = newStrLitNode(srcs.join("\n"))
-
-# proc vartest*(x, y: int): int =
-#   var x = 1
-#   var
-#     y = 2
-#     z = 3
-#   x = 5
-#   for i in 0..<10:
-#     var a = i
-#   return x + y + z
-
-# proc fortest() =
-#   for i in 0..<10:
-#     var a = i
-# genCLKernelSource(vartest)
-# genCLSource(fortest)

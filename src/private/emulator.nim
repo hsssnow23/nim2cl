@@ -20,10 +20,10 @@ type
     w*: float32
 
 type
-  Global*[T] = T
-  Local*[T] = T
-  Private*[T] = T
-  Constant*[T] = T
+  global*[T] = T
+  local*[T] = T
+  private*[T] = T
+  constant*[T] = T
 
 var currentGlobalID = @[0]
 var currentLocalID = @[0]
