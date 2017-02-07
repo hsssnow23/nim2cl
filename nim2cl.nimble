@@ -6,8 +6,7 @@ license = "MIT"
 
 srcDir = "src"
 
-requires "nim >= 0.15.2" 
+requires "nim >= 0.15.2"
 
 task test, "test nim2cl":
   exec "nim c -r tests/tester.nim"
-  
