@@ -62,9 +62,27 @@ __kernel void ptrtest(__global float* vals) {
 
 proc builtintest() =
   let i = getGlobalID(0)
-const builtinSrc = """
+const builtintestSrc = """
 __kernel void builtintest() {
   int i = get_global_id(0);
+}"""
+
+type MyInt = object
+  x: int
+  y: int
+proc objecttest() =
+  var mi: MyInt
+  mi.x = 1
+  mi.y = 2
+const objecttestSrc = """
+typedef struct {
+  int x;
+  int y;
+} MyInt;
+__kernel void objecttest() {
+  MyInt mi;
+  mi.x = 1;
+  mi.y = 2;
 }"""
 
 suite "nim2cl basic test":
@@ -79,4 +97,6 @@ suite "nim2cl basic test":
   test "ptr":
     check genCLKernelSource(ptrtest) == ptrtestSrc
   test "builtin":
-    check genCLKernelSource(builtintest) == builtinSrc
+    check genCLKernelSource(builtintest) == builtintestSrc
+  test "object":
+    check genCLKernelSource(objecttest) == objecttestSrc

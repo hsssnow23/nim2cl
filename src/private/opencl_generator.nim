@@ -14,6 +14,7 @@ type
     indentwidth*: int
     currentindentnum*: int
     isFormat*: bool
+    objects*: Table[string, bool]
     manglingprocs*: Table[ManglingIndex, string]
     manglingcount*: int
     dependsrcs*: seq[string]
@@ -93,6 +94,15 @@ proc semicolon*(comp: var CompSrc) =
   if comp.src.len > 0 and last != ';' and last != '}' and last != '{':
     comp &= ";"
 
+template getSrc*(procname: typed, generator: Generator, n: NimNode): string =
+  var comp = newCompSrc(generator)
+  procname(generator, n, comp)
+  $comp
+
+#
+# generate object from type
+#
+
 #
 # generate from NimNode
 #
@@ -101,28 +111,61 @@ proc gen*(generator: Generator, n: NimNode, r: var CompSrc)
 proc genStmtListInside*(generator: Generator, n: NimNode, r: var CompSrc)
 proc genStmtList*(generator: Generator, n: NimNode, r: var CompSrc)
 proc genProcDef*(generator: Generator, n: NimNode, r: var CompSrc, isKernel = false, mangling = false)
+proc genType*(generator: Generator, t: NimNode, r: var CompSrc)
+proc genTypeFromVal*(generator: Generator, t: NimNode, r: var CompSrc)
 
-proc genType*(t: NimNode): string =
+proc genTypeDef*(generator: Generator, n: NimNode, r: var CompSrc) =
+  let objty = n[2]
+  if objty.kind != nnkObjectTy:
+    error("($#) is unsupported type def" % $objty.kind, n)
+
+  var typesrc = newCompSrc(generator)
+  typesrc &= "typedef struct {$n"
+  generator.indent:
+    for field in objty[2]:
+      typesrc &= "$i"
+      genType(generator, field[1], typesrc)
+      typesrc &= " "
+      typesrc &= $field[0]
+      typesrc &= ";$n"
+  typesrc &= "} $#;" % $n[0]
+
+  generator.dependsrcs.add($typesrc)
+  r &= $n[0]
+
+proc genType*(generator: Generator, t: NimNode, r: var CompSrc) =
   if t.kind == nnkEmpty:
-    result = "void"
+    r &= "void"
   elif t.kind == nnkPtrTy:
-    result = t[0].repr & "*"
+    genType(generator, t[0], r)
+    r &= "*"
   elif t.kind == nnkBracketExpr:
     case $t[0]
     of "global":
-      result = "__global " & genType(t[1])
+      r &= "__global "
+      genType(generator, t[1], r)
     of "local":
-      result = "__local " & genType(t[1])
+      r &= "__local "
+      genType(generator, t[1], r)
     of "private":
-      result = "__private " & genType(t[1])
+      r &= "__private "
+      genType(generator, t[1], r)
     of "constant":
-      result = "__constant " & genType(t[1])
+      r &= "__constant "
+      genType(generator, t[1], r)
     else:
-      result = t.repr
+      r &= t.repr
+  elif t.kind == nnkSym:
+    let typeimpl = t.symbol.getImpl()
+    if typeimpl.kind == nnkTypeDef:
+      generator.reset:
+        genTypeDef(generator, typeimpl, r)
+    else:
+      r &= t.repr
   else:
-    result = t.repr
-proc genTypeFromVal*(t: NimNode): string =
-  return genType(getTypeInst(t))
+    r &= t.repr
+proc genTypeFromVal*(generator: Generator, t: NimNode, r: var CompSrc) =
+  genType(generator, getTypeInst(t), r)
 
 proc genLetSection*(generator: Generator, n: NimNode, r: var CompSrc) =
   var letsrcs = newSeq[string]()
@@ -133,28 +176,27 @@ proc genLetSection*(generator: Generator, n: NimNode, r: var CompSrc) =
     if typ.kind == nnkEmpty and val.kind == nnkEmpty:
       discard
     elif val.kind == nnkEmpty:
-      letsrcs.add("$# $#" % [genType(typ), $name])
+      letsrcs.add("$# $#" % [getSrc(genType, generator, typ), $name])
     else:
-      var valcomp = newCompSrc(generator)
-      gen(generator, val, valcomp)
-      letsrcs.add("$# $# = $#" % [genTypeFromVal(val), $name, $valcomp])
+      letsrcs.add("$# $# = $#" % [getSrc(genTypeFromVal, generator, val), $name, getSrc(gen, generator, val)])
   r &= letsrcs.join(";$n$i")
 
 proc genAsgn*(generator: Generator, n: NimNode, r: var CompSrc) =
-  var
-    leftcomp = newCompSrc(generator)
-    rightcomp = newCompSrc(generator)
-  gen(generator, n[0], leftcomp)
-  gen(generator, n[1], rightcomp)
-  r &= "$# = $#" % [$leftcomp, $rightcomp]
+  gen(generator, n[0], r)
+  r &= " = "
+  gen(generator, n[1], r)
 
 proc genInfix*(generator: Generator, n: NimNode, r: var CompSrc) =
-  var
-    leftcomp = newCompSrc(generator)
-    rightcomp = newCompSrc(generator)
-  gen(generator, n[1], leftcomp)
-  gen(generator, n[2], rightcomp)
-  r &= "($# $# $#)" % [$leftcomp, $n[0], $rightcomp]
+  r &= "("
+  gen(generator, n[1], r)
+  r &= " $# " % $n[0]
+  gen(generator, n[2], r)
+  r &= ")"
+
+proc genDotExpr*(generator: Generator, n: NimNode, r: var CompSrc) =
+  gen(generator, n[0], r)
+  r &= "."
+  gen(generator, n[1], r)
 
 proc isPrimitiveCall*(n: NimNode): bool =
   let name = $n[0]
@@ -274,6 +316,7 @@ proc gen*(generator: Generator, n: NimNode, r: var CompSrc) =
   of nnkLetSection, nnkVarSection: genLetSection(generator, n, r)
   of nnkAsgn, nnkFastAsgn: genAsgn(generator, n, r)
   of nnkInfix: genInfix(generator, n, r)
+  of nnkDotExpr: genDotExpr(generator, n, r)
   of nnkCall, nnkCommand: genCall(generator, n, r)
   of nnkWhileStmt: genWhileStmt(generator, n, r)
   of nnkBlockStmt: genBlockStmt(generator, n, r)
@@ -293,29 +336,29 @@ proc gen*(generator: Generator, n: NimNode, r: var CompSrc) =
 #
 
 proc genRetType*(generator: Generator, n: NimNode, r: var CompSrc) =
-  r &= genType(n[0])
+  genType(generator, n[0], r)
 
 proc genArgTypes*(generator: Generator, n: NimNode, r: var CompSrc) =
   var argsrcs = newSeq[string]()
   for i in 1..<n.len:
     if n[i].len == 3:
-      argsrcs.add("$# $#" % [genType(n[i][1]), $n[i][0]])
+      argsrcs.add("$# $#" % [getSrc(genType, generator, n[i][1]), $n[i][0]])
     else:
       let typ = n[i][^2]
       for j in 0..<n[i].len-2:
         let name = n[i][j]
-        argsrcs.add("$# $#" % [genType(typ), $name])
+        argsrcs.add("$# $#" % [getSrc(genType, generator, typ), $name])
   r &= argsrcs.join(", ")
 
 proc genResultStart*(generator: Generator, n: NimNode, r: var CompSrc) =
-  let t = genType(n)
+  let t = getSrc(genType, generator, n)
   if t != "void":
     generator.indent:
       r &= "$i"
       r &= "$# result;" % t
       r &= "$n"
 proc genResultEnd*(generator: Generator, n: NimNode, r: var CompSrc) =
-  let t = genType(n)
+  let t = getSrc(genType, generator, n)
   if t != "void":
     generator.indent:
       r &= "$ireturn result;$n"
