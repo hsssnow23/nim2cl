@@ -3,7 +3,8 @@ import macros
 import strutils, sequtils
 import tables, hashes
 
-proc openclbuiltin*(name: string = nil) = discard
+proc openclproc*(name: string = nil) = discard
+proc openclinfix*() = discard
 
 type
   ManglingIndex* = object
@@ -21,6 +22,12 @@ type
   CompSrc* = object
     generator: Generator
     src: string
+
+type
+  ProcType* = enum
+    procNormal
+    procInfix
+    procBuiltin
 
 proc newManglingIndex*(procname: string, argtypes: seq[string]): ManglingIndex =
   result.procname = procname
@@ -42,6 +49,7 @@ proc newGenerator*(isFormat = true, indentwidth = 2): Generator =
   result.indentwidth = indentwidth
   result.currentindentnum = 0
   result.isFormat = isFormat
+  result.objects = initTable[string, bool]()
   result.manglingprocs = initTable[ManglingIndex, string]()
   result.manglingcount = 0
   result.dependsrcs = @[]
@@ -76,7 +84,12 @@ proc genManglingName*(generator: Generator, manglingindex: ManglingIndex): strin
   if generator.manglingprocs.hasKey(manglingindex):
     result = generator.manglingprocs[manglingindex]
   else:
-    result = manglingindex.procname & "_" & manglingindex.argtypes.join("_") & "_" & $generator.manglingcount
+    let name = case manglingindex.procname
+      of "+", "-", "*", "/", "%", "<", ">", "<=", ">=", "==":
+        "infix"
+      else:
+        manglingindex.procname
+    result = name & "_" & manglingindex.argtypes.join("_") & "_" & $generator.manglingcount
     generator.manglingprocs[manglingindex] = result
     generator.manglingcount += 1
 
@@ -115,6 +128,11 @@ proc genType*(generator: Generator, t: NimNode, r: var CompSrc)
 proc genTypeFromVal*(generator: Generator, t: NimNode, r: var CompSrc)
 
 proc genTypeDef*(generator: Generator, n: NimNode, r: var CompSrc) =
+  let name = $n[0]
+  if generator.objects.hasKey(name):
+    r &= $n[0]
+    return
+
   let objty = n[2]
   if objty.kind != nnkObjectTy:
     error("($#) is unsupported type def" % $objty.kind, n)
@@ -131,7 +149,8 @@ proc genTypeDef*(generator: Generator, n: NimNode, r: var CompSrc) =
   typesrc &= "} $#;" % $n[0]
 
   generator.dependsrcs.add($typesrc)
-  r &= $n[0]
+  generator.objects[name] = true
+  r &= name
 
 proc genType*(generator: Generator, t: NimNode, r: var CompSrc) =
   if t.kind == nnkEmpty:
@@ -186,12 +205,42 @@ proc genAsgn*(generator: Generator, n: NimNode, r: var CompSrc) =
   r &= " = "
   gen(generator, n[1], r)
 
+proc isPrimitiveInfix*(generator: Generator, n: NimNode, r: var CompSrc): bool =
+  let
+    name = $n[0]
+    lefttype = getSrc(genTypeFromVal, generator, n[1])
+    righttype = getSrc(genTypeFromVal, generator, n[2])
+  case name
+  of "+", "-", "*", "/", "%", "<", ">", "<=", ">=", "==":
+    if lefttype == "float" and righttype == "float":
+      return true
+    elif lefttype == "float" and righttype == "float64":
+      return true
+    elif lefttype == "float64" and righttype == "float":
+      return true
+    elif lefttype == "float64" and righttype == "float64":
+      return true
+    elif lefttype == "int" and righttype == "int":
+      return true
+    else:
+      return false
+  else:
+    return false
+
 proc genInfix*(generator: Generator, n: NimNode, r: var CompSrc) =
-  r &= "("
-  gen(generator, n[1], r)
-  r &= " $# " % $n[0]
-  gen(generator, n[2], r)
-  r &= ")"
+  if isPrimitiveInfix(generator, n, r):
+    r &= "("
+    gen(generator, n[1], r)
+    r &= " $# " % $n[0]
+    gen(generator, n[2], r)
+    r &= ")"
+  else:
+    gen(generator, n[0], r)
+    r &= "("
+    gen(generator, n[1], r)
+    r &= ", "
+    gen(generator, n[2], r)
+    r &= ")"
 
 proc genDotExpr*(generator: Generator, n: NimNode, r: var CompSrc) =
   gen(generator, n[0], r)
@@ -369,11 +418,29 @@ proc genBuiltinProc*(generator: Generator, n: NimNode, r: var CompSrc) =
   var manglingindex = getManglingIndex(n)
   generator.manglingprocs[manglingindex] = builtinname
 
-proc genProcDef*(generator: Generator, n: NimNode, r: var CompSrc, isKernel = false, mangling = false) =
+proc genBuiltinInfix*(generator: Generator, n: NimNode, r: var CompSrc) =
+  var manglingindex = getManglingIndex(n)
+  generator.manglingprocs[manglingindex] = $n[0]
+
+proc getProcType*(n: NimNode): ProcType =
   let first = if n.body.kind == nnkStmtList: n.body[0] else: n.body
-  if first.kind == nnkCall and $first[0] == "openclbuiltin":
+  if first.kind == nnkCall and $first[0] == "openclproc":
+    return procBuiltin
+  elif first.kind == nnkCall and $first[0] == "openclinfix":
+    return procInfix
+  else:
+    return procNormal
+
+proc genProcDef*(generator: Generator, n: NimNode, r: var CompSrc, isKernel = false, mangling = false) =
+  case getProcType(n)
+  of procBuiltin:
     genBuiltinProc(generator, n, r)
     return
+  of procInfix:
+    genBuiltinInfix(generator, n, r)
+    return
+  of procNormal:
+    discard
 
   if isKernel:
     r &= "__kernel "

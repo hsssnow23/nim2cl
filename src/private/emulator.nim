@@ -30,10 +30,10 @@ var currentGlobalID = @[0]
 var currentLocalID = @[0]
 
 proc getGlobalID*(index: int): int =
-  openclbuiltin("get_global_id")
+  openclproc("get_global_id")
   return currentGlobalID[index]
 proc getLocalID*(index: int): int =
-  openclbuiltin("get_local_id")
+  openclproc("get_global_id")
   return currentLocalID[index]
 proc dot*(left: float3, right: float3): float =
   discard # TODO: dot in gpgpu emulator

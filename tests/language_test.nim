@@ -85,6 +85,30 @@ __kernel void objecttest() {
   mi.y = 2;
 }"""
 
+proc `+`(left, right: MyInt): MyInt =
+  result.x = left.x + right.x
+  result.y = left.y + right.y
+proc externalinfixtest() =
+  var left: MyInt
+  var right: MyInt
+  discard left + right
+const externalinfixSrc = """
+typedef struct {
+  int x;
+  int y;
+} MyInt;
+MyInt infix__0(MyInt left, MyInt right) {
+  MyInt result;
+  result.x = (left.x + right.x);
+  result.y = (left.y + right.y);
+  return result;
+}
+__kernel void externalinfixtest() {
+  MyInt left;
+  MyInt right;
+  infix__0(left, right);
+}"""
+
 suite "nim2cl basic test":
   test "var":
     check genCLKernelSource(vartest) == vartestSrc
@@ -100,3 +124,5 @@ suite "nim2cl basic test":
     check genCLKernelSource(builtintest) == builtintestSrc
   test "object":
     check genCLKernelSource(objecttest) == objecttestSrc
+  test "external infix":
+    check genCLKernelSource(externalinfixtest) == externalinfixSrc
