@@ -109,6 +109,10 @@ __kernel void externalinfixtest() {
   infix__0(left, right);
 }"""
 
+defineProgram forandvar:
+  vartest
+  fortest
+
 suite "nim2cl basic test":
   test "var":
     check genCLKernelSource(vartest) == vartestSrc
@@ -126,3 +130,5 @@ suite "nim2cl basic test":
     check genCLKernelSource(objecttest) == objecttestSrc
   test "external infix":
     check genCLKernelSource(externalinfixtest) == externalinfixSrc
+  test "defineProgram":
+    check genProgram(forandvar) == ""

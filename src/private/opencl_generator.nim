@@ -3,6 +3,10 @@ import macros
 import strutils, sequtils
 import tables, hashes
 
+export macros
+export strutils
+export sequtils
+
 proc openclproc*(name: string = nil) = discard
 proc openclinfix*() = discard
 
@@ -468,10 +472,35 @@ proc genProcDef*(generator: Generator, n: NimNode, r: var CompSrc, isKernel = fa
 #
 
 macro genCLKernelSource*(procname: typed): untyped =
-  echo procname.symbol.getImpl().treerepr
+  # echo procname.symbol.getImpl().treerepr
   let generator = newGenerator()
   var comp = newCompSrc(generator)
   genProcDef(generator, procname.symbol.getImpl(), comp, isKernel = true)
   var srcs = generator.dependsrcs
   srcs.add($comp)
   result = newStrLitNode(srcs.join("\n"))
+
+macro defineProgram*(name: untyped, body: untyped): untyped =
+  name.expectKind(nnkIdent)
+  for kernel in body:
+    kernel.expectKind(nnkIdent)
+  
+  var genmacro = parseExpr("macro gen$#*(): untyped = discard" % $name)
+  genmacro[6] = newStmtList()
+  genmacro[6].add(parseExpr("var tmpsrcs: seq[string] = @[]"))
+  genmacro[6].add(parseExpr("var generator = newGenerator()"))
+  for kernel in body:
+    var kernelstmt = newStmtList()
+    kernelstmt.add(parseExpr("var $1 = bindSym(\"$1\")" % $kernel))
+    kernelstmt.add(parseExpr("var comp = newCompSrc(generator)"))
+    kernelstmt.add(parseExpr("genProcDef(generator, $#.symbol.getImpl(), comp, isKernel = true)" % $kernel))
+    kernelstmt.add(parseExpr("tmpsrcs.add($comp)"))
+    genmacro[6].add(newBlockStmt(kernelstmt))
+  genmacro[6].add(parseExpr("return newStrLitNode(concat(generator.dependsrcs, tmpsrcs).join(\"\\n\"))"))
+
+  echo genmacro.repr
+
+  return genmacro
+
+template genProgram*(programname: untyped): string =
+  `gen programname`()
