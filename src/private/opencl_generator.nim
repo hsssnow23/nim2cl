@@ -48,10 +48,20 @@ proc hash*(manglingindex: ManglingIndex): Hash =
 
 let primitiveprocs* = [
   (name: "abs", args: @["float"], raw: "fabs"),
+  (name: "abs", args: @["double"], raw: "fabs"),
   (name: "abs", args: @["int"], raw: "abs"),
   (name: "sqrt", args: @["float"], raw: "sqrt"),
+  (name: "sqrt", args: @["double"], raw: "sqrt"),
   (name: "dot", args: @["float3", "float3"], raw: "dot"),
   (name: "normalize", args: @["float3"], raw: "normalize"),
+  (name: "exp", args: @["float"], raw: "exp"),
+  (name: "exp", args: @["double"], raw: "exp"),
+  (name: "log", args: @["float"], raw: "log"),
+  (name: "log", args: @["double"], raw: "log"),
+  (name: "max", args: @["float", "float"], raw: "max"),
+  (name: "min", args: @["float", "float"], raw: "min"),
+  (name: "max", args: @["double", "double"], raw: "max"),
+  (name: "min", args: @["double", "double"], raw: "min"),
 ]
 
 proc newGenerator*(isFormat = true, indentwidth = 2): Generator =
@@ -194,11 +204,15 @@ proc genType*(generator: Generator, t: NimNode, r: var CompSrc) =
     of "constant":
       r &= "__constant "
       genType(generator, t[1], r)
+    of "var":
+      genType(generator, t[1], r)
     else:
       r &= t.repr
   elif t.kind == nnkSym:
     let typeimpl = t.symbol.getImpl()
     if $t == "float64":
+      r &= "double"
+    elif $t == "float32":
       r &= "float"
     elif $t == "bool":
       r &= "int"
@@ -207,8 +221,10 @@ proc genType*(generator: Generator, t: NimNode, r: var CompSrc) =
         genTypeDef(generator, typeimpl, r)
     else:
       r &= t.repr
-  else:
+  elif t.kind == nnkIdent:
     r &= $t
+  else:
+    error "($#) $# is unsupported type: $#" % [t.lineinfo, $t.kind, t.repr], t
 proc genTypeFromVal*(generator: Generator, t: NimNode, r: var CompSrc) =
   genType(generator, getTypeInst(t), r)
 
@@ -239,14 +255,14 @@ proc isPrimitiveInfix*(generator: Generator, n: NimNode, r: var CompSrc): bool =
     lefttype = getSrc(genTypeFromVal, generator, n[1])
     righttype = getSrc(genTypeFromVal, generator, n[2])
   case name
-  of "+", "-", "*", "/", "%", "<", ">", "<=", ">=", "==":
+  of "+", "-", "*", "/", "%", "+=", "-=", "*=", "/=", "<", ">", "<=", ">=", "==":
     if lefttype == "float" and righttype == "float":
       return true
-    elif lefttype == "float" and righttype == "float64":
+    elif lefttype == "float" and righttype == "double":
       return true
-    elif lefttype == "float64" and righttype == "float":
+    elif lefttype == "double" and righttype == "float":
       return true
-    elif lefttype == "float64" and righttype == "float64":
+    elif lefttype == "double" and righttype == "double":
       return true
     elif lefttype == "int" and righttype == "int":
       return true
@@ -262,6 +278,18 @@ proc genInfix*(generator: Generator, n: NimNode, r: var CompSrc) =
     r &= " $# " % $n[0]
     gen(generator, n[2], r)
     r &= ")"
+  elif $n[0] == "and":
+    r &= "("
+    gen(generator, n[1], r)
+    r &= " && "
+    gen(generator, n[2], r)
+    r &= ")"
+  elif $n[0] == "or":
+    r &= "("
+    gen(generator, n[1], r)
+    r &= " || "
+    gen(generator, n[2], r)
+    r &= ")"
   else:
     gen(generator, n[0], r)
     r &= "("
@@ -269,6 +297,15 @@ proc genInfix*(generator: Generator, n: NimNode, r: var CompSrc) =
     r &= ", "
     gen(generator, n[2], r)
     r &= ")"
+
+proc genPrefix*(generator: Generator, n: NimNode, r: var CompSrc) =
+  r &= "("
+  case $n[0]
+  of "not":
+    r &= "!"
+  else:
+    error "$# is unsupported prefix" % [$n[0]], n
+  r &= ")"
 
 proc genDotExpr*(generator: Generator, n: NimNode, r: var CompSrc) =
   gen(generator, n[0], r)
@@ -306,11 +343,23 @@ proc genPrimitiveCall*(generator: Generator, n: NimNode, r: var CompSrc) =
   else:
     error "unknown primitive call", n
 
+proc getManglingIndexFromCall*(generator: Generator, n: NimNode): ManglingIndex =
+  result.procname = $n[0]
+  result.argtypes = @[]
+  for i in 1..<n.len:
+    var typecomp = newCompSrc(generator)
+    genTypeFromVal(generator, n[i], typecomp)
+    result.argtypes.add(($typecomp).replace(" ", ""))
+
 proc genCall*(generator: Generator, n: NimNode, r: var CompSrc) =
   if isPrimitiveCall(n):
     genPrimitiveCall(generator, n, r)
   else:
-    gen(generator, n[0], r)
+    let manglingindex = getManglingIndexFromCall(generator, n)
+    if generator.manglingprocs.hasKey(manglingindex):
+      r &= generator.manglingprocs[manglingindex]
+    else:
+      gen(generator, n[0], r)
     r &= "("
     var args = newSeq[string]()
     for i in 1..<n.len:
@@ -405,6 +454,9 @@ proc genBlockStmt*(generator: Generator, n: NimNode, r: var CompSrc) =
       gen(generator, n[1], r)
   r &= "$i}"
 
+proc genBreakStmt*(generator: Generator, n: NimNode, r: var CompSrc) =
+  r &= "break"
+
 proc genStmtListInside*(generator: Generator, n: NimNode, r: var CompSrc) =
   for e in n.children:
     if e.kind == nnkStmtList:
@@ -473,6 +525,9 @@ proc genSym*(generator: Generator, n: NimNode, r: var CompSrc) =
 proc genConv*(generator: Generator, n: NimNode, r: var CompSrc) =
   gen(generator, n[1], r)
 
+proc genHiddenDeref*(generator: Generator, n: NimNode, r: var CompSrc) =
+  gen(generator, n[0], r)
+
 proc genDiscardStmt*(generator: Generator, n: NimNode, r: var CompSrc) =
   if n.len == 1:
     gen(generator, n[0], r)
@@ -489,19 +544,22 @@ proc gen*(generator: Generator, n: NimNode, r: var CompSrc) =
   of nnkLetSection, nnkVarSection: genLetSection(generator, n, r)
   of nnkAsgn, nnkFastAsgn: genAsgn(generator, n, r)
   of nnkInfix: genInfix(generator, n, r)
+  of nnkPrefix: genPrefix(generator, n, r)
   of nnkDotExpr: genDotExpr(generator, n, r)
   of nnkCall, nnkCommand: genCall(generator, n, r)
   of nnkWhileStmt: genWhileStmt(generator, n, r)
   of nnkIfStmt: genIfStmt(generator, n, r)
   of nnkIfExpr: genIfExpr(generator, n, r)
   of nnkBlockStmt: genBlockStmt(generator, n, r)
+  of nnkBreakStmt: genBreakStmt(generator, n, r)
   of nnkStmtList: genStmtList(generator, n, r)
   of nnkStmtListExpr: genStmtListExpr(generator, n, r)
   of nnkReturnStmt: genReturnStmt(generator, n, r)
   of nnkIntLit: genIntLit(generator, n, r)
-  of nnkFloatLit, nnkFloat64Lit: genFloatLit(generator, n, r)
+  of nnkFloatLit, nnkFloat32Lit, nnkFloat64Lit: genFloatLit(generator, n, r)
   of nnkSym: genSym(generator, n, r)
   of nnkConv, nnkHiddenStdConv: genConv(generator, n, r)
+  of nnkHiddenDeref, nnkHiddenAddr: genHiddenDeref(generator, n, r)
   of nnkDiscardStmt: genDiscardStmt(generator, n, r)
   of nnkCast: genCast(generator, n, r)
   of nnkCommentStmt, nnkEmpty: discard
