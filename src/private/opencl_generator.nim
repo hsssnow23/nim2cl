@@ -23,9 +23,12 @@ type
     manglingprocs*: Table[ManglingIndex, string]
     manglingcount*: int
     dependsrcs*: seq[string]
+    tmpcount*: int
   CompSrc* = object
     generator: Generator
+    before: string
     src: string
+    after: string
 
 type
   ProcType* = enum
@@ -60,9 +63,14 @@ proc newGenerator*(isFormat = true, indentwidth = 2): Generator =
   result.manglingprocs = initTable[ManglingIndex, string]()
   result.manglingcount = 0
   result.dependsrcs = @[]
+  result.tmpcount = 0
 
   for primitive in primitiveprocs:
     result.manglingprocs[newManglingIndex(primitive.name, primitive.args)] = primitive.raw
+
+proc genTmpSym*(generator: Generator): string =
+  result = "_nim2cl_tmp" & $generator.tmpcount
+  generator.tmpcount += 1
 
 proc genIndent*(generator: Generator): string =
   repeat(" ", generator.indentwidth*generator.currentindentnum)
@@ -102,12 +110,19 @@ proc genManglingName*(generator: Generator, manglingindex: ManglingIndex): strin
 
 proc newCompSrc*(generator: Generator): CompSrc =
   result.generator = generator
+  result.before = ""
   result.src = ""
+  result.after = ""
 
 proc `&=`*(comp: var CompSrc, s: string) =
   comp.src &= comp.generator.format(s)
 
-proc `$`*(comp: CompSrc): string = comp.src
+proc `&=`*(comp: var CompSrc, c: CompSrc) =
+  comp.before &= comp.generator.format(c.before)
+  comp.src &= comp.generator.format(c.src)
+  comp.after &= comp.generator.format(c.after)
+
+proc `$`*(comp: CompSrc): string = comp.before & comp.src & comp.after
 
 proc semicolon*(comp: var CompSrc) =
   let last = comp.src[^1]
@@ -183,14 +198,15 @@ proc genType*(generator: Generator, t: NimNode, r: var CompSrc) =
       r &= t.repr
   elif t.kind == nnkSym:
     let typeimpl = t.symbol.getImpl()
-    if typeimpl.kind == nnkTypeDef:
+    if $t == "float64":
+      r &= "float"
+    elif $t == "bool":
+      r &= "int"
+    elif typeimpl.kind == nnkTypeDef:
       generator.reset:
         genTypeDef(generator, typeimpl, r)
     else:
-      if $t == "float64":
-        r &= "float"
-      else:
-        r &= t.repr
+      r &= t.repr
   else:
     r &= $t
 proc genTypeFromVal*(generator: Generator, t: NimNode, r: var CompSrc) =
@@ -207,7 +223,9 @@ proc genLetSection*(generator: Generator, n: NimNode, r: var CompSrc) =
     elif val.kind == nnkEmpty:
       letsrcs.add("$# $#" % [getSrc(genType, generator, typ), $name])
     else:
-      letsrcs.add("$# $# = $#" % [getSrc(genTypeFromVal, generator, val), $name, getSrc(gen, generator, val)])
+      genTypeFromVal(generator, val, r)
+      r &= " " & $name & " = "
+      gen(generator, val, r)
   r &= letsrcs.join(";$n$i")
 
 proc genAsgn*(generator: Generator, n: NimNode, r: var CompSrc) =
@@ -306,10 +324,76 @@ proc genWhileStmt*(generator: Generator, n: NimNode, r: var CompSrc) =
   var condcomp = newCompSrc(generator)
   gen(generator, n[0], condcomp)
   r &= "while ("
-  r &= $condcomp
+  r &= condcomp
   r &= ") {$n"
   gen(generator, n[1], r)
   r &= "$i}$n"
+
+proc genIfStmt*(generator: Generator, n: NimNode, r: var CompSrc) =
+  r &= "if ("
+  gen(generator, n[0][0], r)
+  r &= ") {$n"
+  gen(generator, n[0][1], r)
+  r &= "$i}"
+  for i in 1..<n.len:
+    if n[i].kind == nnkElifBranch:
+      r &= " else if ("
+      gen(generator, n[i][0], r)
+      r &= ") {$n"
+      gen(generator, n[i][1], r)
+      r &= "$i}"
+    else:
+      r &= " else {$n"
+      gen(generator, n[i][0], r)
+      r &= "$i}"
+
+proc removeLastExpr*(n: NimNode): NimNode =
+  result = newStmtList()
+  for i in 0..<n.len-1:
+    result.add(n[i])
+proc genLastExpr*(generator: Generator, n: NimNode, r: var CompSrc, rettmpname: string) =
+  generator.indent:
+    r &= "$i"
+    r &= rettmpname & " = "
+    gen(generator, n, r)
+    r &= ";$n"
+proc genTmpVar*(generator: Generator, n: NimNode, r: var CompSrc, rettmpname: string) =
+  generator.indent:
+    var typecomp = newCompSrc(generator)
+    genTypeFromVal(generator, n, typecomp)
+    r.before &= "$i" & $typecomp & " " & rettmpname & ";$n"
+proc genExpr*(generator: Generator, n: NimNode, r: var CompSrc, rettmpname: string) =
+  if n.kind == nnkStmtList:
+    gen(generator, n.removeLastExpr, r)
+    genLastExpr(generator, n[^1], r, rettmpname)
+  else:
+    genLastExpr(generator, n, r, rettmpname)
+
+proc genIfExprInside*(generator: Generator, n: NimNode, r: var CompSrc): string =
+  let rettmpname = genTmpSym(generator)
+  genTmpVar(generator, n[0][1], r, rettmpname)
+  r &= "$iif ("
+  gen(generator, n[0][0], r)
+  r &= ") {$n"
+  genExpr(generator, n[0][1], r, rettmpname)
+  r &= "$i}"
+  for i in 1..<n.len:
+    if n[i].kind == nnkElifBranch:
+      r &= " else if ("
+      gen(generator, n[i][0], r)
+      r &= ") {$n"
+      genExpr(generator, n[i][1], r, rettmpname)
+      r &= "$i}"
+    else:
+      r &= " else {$n"
+      genExpr(generator, n[i][0], r, rettmpname)
+      r &= "$i}$n"
+  return rettmpname
+
+proc genIfExpr*(generator: Generator, n: NimNode, r: var CompSrc) =
+  var ifcomp = newCompSrc(generator)
+  r &= genIfExprInside(generator, n, ifcomp)
+  r.before &= $ifcomp
 
 proc genBlockStmt*(generator: Generator, n: NimNode, r: var CompSrc) =
   r &= "{$n"
@@ -328,11 +412,13 @@ proc genStmtListInside*(generator: Generator, n: NimNode, r: var CompSrc) =
     else:
       var comp = newCompSrc(generator)
       gen(generator, e, comp)
-      if $comp != "":
+      r &= comp.before
+      if comp.src != "":
         r &= "$i"
-        r &= $comp
+        r &= comp.src
         r.semicolon()
         r &= "$n"
+      r &= comp.after
 
 proc genStmtList*(generator: Generator, n: NimNode, r: var CompSrc) =
   generator.indent:
@@ -396,6 +482,8 @@ proc gen*(generator: Generator, n: NimNode, r: var CompSrc) =
   of nnkDotExpr: genDotExpr(generator, n, r)
   of nnkCall, nnkCommand: genCall(generator, n, r)
   of nnkWhileStmt: genWhileStmt(generator, n, r)
+  of nnkIfStmt: genIfStmt(generator, n, r)
+  of nnkIfExpr: genIfExpr(generator, n, r)
   of nnkBlockStmt: genBlockStmt(generator, n, r)
   of nnkStmtList: genStmtList(generator, n, r)
   of nnkReturnStmt: genReturnStmt(generator, n, r)
@@ -407,7 +495,7 @@ proc gen*(generator: Generator, n: NimNode, r: var CompSrc) =
   of nnkCast: genCast(generator, n, r)
   of nnkCommentStmt, nnkEmpty: discard
   else:
-    error("($#) is unsupported NimNode" % $n.kind, n)
+    error("$# is unsupported NimNode: $#" % [$n.kind, n.repr], n)
 
 #
 # ProcDef

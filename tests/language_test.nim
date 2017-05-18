@@ -28,6 +28,31 @@ __kernel void fortest() {
   }
 }"""
 
+proc iftest() =
+  let x = true
+  if x:
+    discard
+  else:
+    discard
+  let y = if x:
+            1
+          else:
+            2                                                         
+const iftestSrc = """
+__kernel void iftest() {
+  int x = 1;
+  if (x) {
+  } else {
+  }
+  int _nim2cl_tmp0;
+  if (x) {
+    _nim2cl_tmp0 = 1;
+  } else {
+    _nim2cl_tmp0 = 2;
+  }
+  int y = _nim2cl_tmp0;
+}"""
+
 proc add5(x: float): float =
   return x + 5.0
 proc proctest() =
@@ -155,6 +180,8 @@ suite "nim2cl basic test":
     check genCLKernelSource(vartest) == vartestSrc
   test "for":
     check genCLKernelSource(fortest) == fortestSrc
+  test "if":
+    check genCLKernelSource(iftest) == iftestSrc
   test "external proc":
     check genCLKernelSource(proctest) == proctestSrc
   test "conv":
