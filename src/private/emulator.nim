@@ -29,10 +29,10 @@ type
 var currentGlobalID = @[0]
 var currentLocalID = @[0]
 
-proc getGlobalID*(index: int): int =
+proc getGlobalID*(index: int): int = # TODO: getGlobalID in gpgpu emulator
   openclproc("get_global_id")
   return currentGlobalID[index]
-proc getLocalID*(index: int): int =
+proc getLocalID*(index: int): int = # TODO: getLocalID in gpgpu emulator
   openclproc("get_global_id")
   return currentLocalID[index]
 proc dot*(left: float3, right: float3): float =
@@ -47,11 +47,17 @@ proc log*(x: float): float =
   discard # TODO: sqrt in gpgpu emulator
 
 proc newFloat2*(x, y: float32): float2 =
-  return float2(x: x, y: y)
+  result.x = x
+  result.y = y
 proc newFloat3*(x, y, z: float32): float3 =
-  return float3(x: x, y: y, z: z)
+  result.x = x
+  result.y = y
+  result.z = z
 proc newFloat4*(x, y, z, w: float32): float4 =
-  return float4(x: x, y: y, z: z, w: w)
+  result.x = x
+  result.y = y
+  result.z = z
+  result.w = w
 
 #
 # CL Type Generator

@@ -60,6 +60,15 @@ const ptrtestSrc = """
 __kernel void ptrtest(__global float* vals) {
 }"""
 
+proc casttest() =
+  let xf = 1.0
+  let xi = cast[int](xf)
+const casttestSrc = """
+__kernel void casttest() {
+  float xf = 1.0;
+  int xi = ((int)xf);
+}"""
+
 proc builtintest() =
   let i = getGlobalID(0)
 const builtintestSrc = """
@@ -112,6 +121,23 @@ __kernel void externalinfixtest() {
 defineProgram forandvar:
   vartest
   fortest
+const forandvarSrc = """
+__kernel void vartest() {
+  int x = 1;
+  x = 5;
+}
+__kernel void fortest() {
+  {
+    int i = 0;
+    {
+      while ((i < 10)) {
+        i = i;
+        int a = i;
+        i += 1;
+      }
+    }
+  }
+}"""
 
 suite "nim2cl basic test":
   test "var":
@@ -124,6 +150,8 @@ suite "nim2cl basic test":
     check genCLKernelSource(convtest) == convtestSrc
   test "ptr":
     check genCLKernelSource(ptrtest) == ptrtestSrc
+  test "cast":
+    check genCLKernelSource(casttest) == casttestSrc
   test "builtin":
     check genCLKernelSource(builtintest) == builtintestSrc
   test "object":
@@ -131,4 +159,4 @@ suite "nim2cl basic test":
   test "external infix":
     check genCLKernelSource(externalinfixtest) == externalinfixSrc
   test "defineProgram":
-    check genProgram(forandvar) == ""
+    check genProgram(forandvar) == forandvarSrc

@@ -46,6 +46,9 @@ proc hash*(manglingindex: ManglingIndex): Hash =
 let primitiveprocs* = [
   (name: "abs", args: @["float"], raw: "fabs"),
   (name: "abs", args: @["int"], raw: "abs"),
+  (name: "sqrt", args: @["float"], raw: "sqrt"),
+  (name: "dot", args: @["float3", "float3"], raw: "dot"),
+  (name: "normalize", args: @["float3"], raw: "normalize"),
 ]
 
 proc newGenerator*(isFormat = true, indentwidth = 2): Generator =
@@ -184,9 +187,12 @@ proc genType*(generator: Generator, t: NimNode, r: var CompSrc) =
       generator.reset:
         genTypeDef(generator, typeimpl, r)
     else:
-      r &= t.repr
+      if $t == "float64":
+        r &= "float"
+      else:
+        r &= t.repr
   else:
-    r &= t.repr
+    r &= $t
 proc genTypeFromVal*(generator: Generator, t: NimNode, r: var CompSrc) =
   genType(generator, getTypeInst(t), r)
 
@@ -336,10 +342,10 @@ proc getManglingIndex*(n: NimNode): ManglingIndex =
   let argtypes = n[3]
   for i in 1..<argtypes.len:
     if argtypes[i].len == 3:
-      result.argtypes.add($argtypes[i][1])
+      result.argtypes.add(argtypes[i][1].repr)
     else:
       for j in 0..<argtypes.len-2:
-        result.argtypes.add($argtypes[i][^2])
+        result.argtypes.add(argtypes[i][^2].repr)
 
 proc genSym*(generator: Generator, n: NimNode, r: var CompSrc) =
   let impl = n.symbol.getImpl()
@@ -364,6 +370,13 @@ proc genDiscardStmt*(generator: Generator, n: NimNode, r: var CompSrc) =
   if n.len == 1:
     gen(generator, n[0], r)
 
+proc genCast*(generator: Generator, n: NimNode, r: var CompSrc) =
+  r &= "(("
+  genType(generator, n[0], r)
+  r &= ")"
+  gen(generator, n[1], r)
+  r &= ")"
+
 proc gen*(generator: Generator, n: NimNode, r: var CompSrc) =
   case n.kind
   of nnkLetSection, nnkVarSection: genLetSection(generator, n, r)
@@ -380,6 +393,7 @@ proc gen*(generator: Generator, n: NimNode, r: var CompSrc) =
   of nnkSym: genSym(generator, n, r)
   of nnkConv, nnkHiddenStdConv: genConv(generator, n, r)
   of nnkDiscardStmt: genDiscardStmt(generator, n, r)
+  of nnkCast: genCast(generator, n, r)
   of nnkCommentStmt, nnkEmpty: discard
   else:
     error("($#) is unsupported NimNode" % $n.kind, n)
@@ -498,9 +512,15 @@ macro defineProgram*(name: untyped, body: untyped): untyped =
     genmacro[6].add(newBlockStmt(kernelstmt))
   genmacro[6].add(parseExpr("return newStrLitNode(concat(generator.dependsrcs, tmpsrcs).join(\"\\n\"))"))
 
-  echo genmacro.repr
-
   return genmacro
 
 template genProgram*(programname: untyped): string =
   `gen programname`()
+
+macro kernel*(procdef: typed): untyped =
+  let procname = if procdef.kind == nnkPostfix:
+                    procdef[0][1]
+                  else:
+                    procdef[0]
+  result = quote do:
+    defaultKernelBuilder(genCLKernelSource(`procname`))
