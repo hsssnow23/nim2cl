@@ -363,7 +363,7 @@ proc genTmpVar*(generator: Generator, n: NimNode, r: var CompSrc, rettmpname: st
     genTypeFromVal(generator, n, typecomp)
     r.before &= "$i" & $typecomp & " " & rettmpname & ";$n"
 proc genExpr*(generator: Generator, n: NimNode, r: var CompSrc, rettmpname: string) =
-  if n.kind == nnkStmtList:
+  if n.kind == nnkStmtList or n.kind == nnkStmtListExpr:
     gen(generator, n.removeLastExpr, r)
     genLastExpr(generator, n[^1], r, rettmpname)
   else:
@@ -423,6 +423,16 @@ proc genStmtListInside*(generator: Generator, n: NimNode, r: var CompSrc) =
 proc genStmtList*(generator: Generator, n: NimNode, r: var CompSrc) =
   generator.indent:
     genStmtListInside(generator, n, r)
+
+proc genStmtListExprInside*(generator: Generator, n: NimNode, r: var CompSrc): string =
+  let rettmpname = genTmpSym(generator)
+  genTmpVar(generator, n, r, rettmpname)
+  genExpr(generator, n, r, rettmpname)
+  return rettmpname
+proc genStmtListExpr*(generator: Generator, n: NimNode, r: var CompSrc) =
+  var stmtcomp = newCompSrc(generator)
+  r &= genStmtListExprInside(generator, n, stmtcomp)
+  r.before &= $stmtcomp
 
 proc genReturnStmt*(generator: Generator, n: NimNode, r: var CompSrc) =
   gen(generator, n[0], r)
@@ -486,6 +496,7 @@ proc gen*(generator: Generator, n: NimNode, r: var CompSrc) =
   of nnkIfExpr: genIfExpr(generator, n, r)
   of nnkBlockStmt: genBlockStmt(generator, n, r)
   of nnkStmtList: genStmtList(generator, n, r)
+  of nnkStmtListExpr: genStmtListExpr(generator, n, r)
   of nnkReturnStmt: genReturnStmt(generator, n, r)
   of nnkIntLit: genIntLit(generator, n, r)
   of nnkFloatLit, nnkFloat64Lit: genFloatLit(generator, n, r)
@@ -495,7 +506,7 @@ proc gen*(generator: Generator, n: NimNode, r: var CompSrc) =
   of nnkCast: genCast(generator, n, r)
   of nnkCommentStmt, nnkEmpty: discard
   else:
-    error("$# is unsupported NimNode: $#" % [$n.kind, n.repr], n)
+    error("($#) $# is unsupported NimNode: $#" % [n.lineinfo, $n.kind, n.repr], n)
 
 #
 # ProcDef

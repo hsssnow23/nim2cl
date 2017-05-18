@@ -68,11 +68,12 @@ macro implCLType*(T: typed): untyped =
 
   let setop = !"[]="
   let accessop = !"[]"
-  result.add quote do:
+  result.add(quote do:
     proc `setop`*(parray: ptr `T`, index: int, value: `T`) =
       cast[ptr array[0, `T`]](parray)[index] = value
     proc `accessop`*(parray: ptr `T`, index: int): `T` =
       return cast[ptr array[0, `T`]](parray)[index]
+  )
 
 implCLType(float32)
 implCLType(float2)
