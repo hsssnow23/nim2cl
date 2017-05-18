@@ -92,7 +92,7 @@ proc genManglingName*(generator: Generator, manglingindex: ManglingIndex): strin
     result = generator.manglingprocs[manglingindex]
   else:
     let name = case manglingindex.procname
-      of "+", "-", "*", "/", "%", "<", ">", "<=", ">=", "==":
+      of "+", "-", "*", "/", "%", "<", ">", "<=", ">=", "==", "[]", "[]=":
         "infix"
       else:
         manglingindex.procname
@@ -259,7 +259,7 @@ proc genDotExpr*(generator: Generator, n: NimNode, r: var CompSrc) =
 
 proc isPrimitiveCall*(n: NimNode): bool =
   let name = $n[0]
-  if name == "inc" or name == "dec":
+  if name == "inc" or name == "dec" or name == "[]" or name == "[]=":
     return true
   else:
     return false
@@ -274,6 +274,17 @@ proc genPrimitiveCall*(generator: Generator, n: NimNode, r: var CompSrc) =
     gen(generator, n[1], r)
     r &= " -= "
     gen(generator, n[2], r)
+  elif name == "[]":
+    gen(generator, n[1], r)
+    r &= "["
+    gen(generator, n[2], r)
+    r &= "]"
+  elif name == "[]=":
+    gen(generator, n[1], r)
+    r &= "["
+    gen(generator, n[2], r)
+    r &= "] = "
+    gen(generator, n[3], r)
   else:
     error "unknown primitive call", n
 
@@ -342,10 +353,10 @@ proc getManglingIndex*(n: NimNode): ManglingIndex =
   let argtypes = n[3]
   for i in 1..<argtypes.len:
     if argtypes[i].len == 3:
-      result.argtypes.add(argtypes[i][1].repr)
+      result.argtypes.add(argtypes[i][1].repr.replace(" ", ""))
     else:
       for j in 0..<argtypes.len-2:
-        result.argtypes.add(argtypes[i][^2].repr)
+        result.argtypes.add(argtypes[i][^2].repr.replace(" ", ""))
 
 proc genSym*(generator: Generator, n: NimNode, r: var CompSrc) =
   let impl = n.symbol.getImpl()

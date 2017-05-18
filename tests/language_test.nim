@@ -69,6 +69,17 @@ __kernel void casttest() {
   int xi = ((int)xf);
 }"""
 
+proc brackettest() =
+  var xs: ptr int
+  var first = xs[0]
+  xs[0] = 9
+const brackettestSrc = """
+__kernel void brackettest() {
+  int* xs;
+  int first = xs[0];
+  xs[0] = 9;
+}"""
+
 proc builtintest() =
   let i = getGlobalID(0)
 const builtintestSrc = """
@@ -152,6 +163,8 @@ suite "nim2cl basic test":
     check genCLKernelSource(ptrtest) == ptrtestSrc
   test "cast":
     check genCLKernelSource(casttest) == casttestSrc
+  test "bracket expr":
+    check genCLKernelSource(brackettest) == brackettestSrc
   test "builtin":
     check genCLKernelSource(builtintest) == builtintestSrc
   test "object":
