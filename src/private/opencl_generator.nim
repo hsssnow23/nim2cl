@@ -36,6 +36,12 @@ type
     procInfix
     procBuiltin
 
+proc removePostfix*(n: NimNode): NimNode =
+  if n.kind == nnkPostfix:
+    n[1]
+  else:
+    n
+
 proc newManglingIndex*(procname: string, argtypes: seq[string]): ManglingIndex =
   result.procname = procname
   result.argtypes = argtypes
@@ -159,10 +165,22 @@ proc genProcDef*(generator: Generator, n: NimNode, r: var CompSrc, isKernel = fa
 proc genType*(generator: Generator, t: NimNode, r: var CompSrc)
 proc genTypeFromVal*(generator: Generator, t: NimNode, r: var CompSrc)
 
+proc isPrimitiveType(name: string): bool =
+  case name
+  of "float2", "float3", "float4":
+    true
+  else:
+    false
+
 proc genTypeDef*(generator: Generator, n: NimNode, r: var CompSrc) =
   let name = $n[0]
+
+  if name.isPrimitiveType():
+    r &= name
+    return
+
   if generator.objects.hasKey(name):
-    r &= $n[0]
+    r &= name
     return
 
   let objty = n[2]
@@ -176,7 +194,7 @@ proc genTypeDef*(generator: Generator, n: NimNode, r: var CompSrc) =
       typesrc &= "$i"
       genType(generator, field[1], typesrc)
       typesrc &= " "
-      typesrc &= $field[0]
+      typesrc &= $(field[0].removePostfix())
       typesrc &= ";$n"
   typesrc &= "} $#;" % $n[0]
 
@@ -303,6 +321,7 @@ proc genPrefix*(generator: Generator, n: NimNode, r: var CompSrc) =
   case $n[0]
   of "not":
     r &= "!"
+    gen(generator, n[1], r)
   else:
     error "$# is unsupported prefix" % [$n[0]], n
   r &= ")"
@@ -382,18 +401,27 @@ proc genIfStmt*(generator: Generator, n: NimNode, r: var CompSrc) =
   r &= "if ("
   gen(generator, n[0][0], r)
   r &= ") {$n"
-  gen(generator, n[0][1], r)
+  generator.indent:
+    r &= "$i"
+    gen(generator, n[0][1], r)
+    r &= ";$n"
   r &= "$i}"
   for i in 1..<n.len:
     if n[i].kind == nnkElifBranch:
       r &= " else if ("
       gen(generator, n[i][0], r)
       r &= ") {$n"
-      gen(generator, n[i][1], r)
+      generator.indent:
+        r &= "$i"
+        gen(generator, n[i][1], r)
+        r &= ";$n"
       r &= "$i}"
     else:
       r &= " else {$n"
-      gen(generator, n[i][0], r)
+      generator.indent:
+        r &= "$i"
+        gen(generator, n[i][0], r)
+        r &= ";$n"
       r &= "$i}"
 
 proc removeLastExpr*(n: NimNode): NimNode =
