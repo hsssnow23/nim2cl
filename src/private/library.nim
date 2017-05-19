@@ -88,7 +88,7 @@ let ID_MAT* = [
   0.0,     0.0, 0.0, 1.0,
 ]
 
-proc `*`*(mat: Global[Matrix], vec: float3): float3 =
+proc `*`*(mat: global[Matrix], vec: float3): float3 =
   result.x = mat[0]*vec.x + mat[4]*vec.y + mat[8]*vec.z + mat[12]
   result.y = mat[1]*vec.x + mat[5]*vec.y + mat[9]*vec.z + mat[13]
   result.z = mat[2]*vec.x + mat[6]*vec.y + mat[10]*vec.z + mat[14]

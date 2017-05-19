@@ -1,6 +1,7 @@
 
 import macros, macro_utils
 import strutils
+import opencl_generator
 
 type
   float2* = object
@@ -20,17 +21,19 @@ type
     w*: float32
 
 type
-  Global*[T] = T
-  Local*[T] = T
-  Private*[T] = T
-  Constant*[T] = T
+  global*[T] = T
+  local*[T] = T
+  private*[T] = T
+  constant*[T] = T
 
 var currentGlobalID = @[0]
 var currentLocalID = @[0]
 
-proc getGlobalID*(index: int): int =
+proc getGlobalID*(index: int): int = # TODO: getGlobalID in gpgpu emulator
+  openclproc("get_global_id")
   return currentGlobalID[index]
-proc getLocalID*(index: int): int =
+proc getLocalID*(index: int): int = # TODO: getLocalID in gpgpu emulator
+  openclproc("get_global_id")
   return currentLocalID[index]
 proc dot*(left: float3, right: float3): float =
   discard # TODO: dot in gpgpu emulator
@@ -38,17 +41,23 @@ proc normalize*(vec: float3): float3 =
   discard # TODO: normalize in gpgpu emulator
 proc abs*(x: int): float =
   discard # TODO: fabs in gpgpu emulator
-proc fabs*(x: float): float =
-  discard # TODO: fabs in gpgpu emulator
 proc sqrt*(x: float): float =
+  discard # TODO: sqrt in gpgpu emulator
+proc log*(x: float): float =
   discard # TODO: sqrt in gpgpu emulator
 
 proc newFloat2*(x, y: float32): float2 =
-  return float2(x: x, y: y)
+  result.x = x
+  result.y = y
 proc newFloat3*(x, y, z: float32): float3 =
-  return float3(x: x, y: y, z: z)
+  result.x = x
+  result.y = y
+  result.z = z
 proc newFloat4*(x, y, z, w: float32): float4 =
-  return float4(x: x, y: y, z: z, w: w)
+  result.x = x
+  result.y = y
+  result.z = z
+  result.w = w
 
 #
 # CL Type Generator
@@ -59,11 +68,12 @@ macro implCLType*(T: typed): untyped =
 
   let setop = !"[]="
   let accessop = !"[]"
-  result.add quote do:
+  result.add(quote do:
     proc `setop`*(parray: ptr `T`, index: int, value: `T`) =
       cast[ptr array[0, `T`]](parray)[index] = value
     proc `accessop`*(parray: ptr `T`, index: int): `T` =
       return cast[ptr array[0, `T`]](parray)[index]
+  )
 
 implCLType(float32)
 implCLType(float2)

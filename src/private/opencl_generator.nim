@@ -1,849 +1,722 @@
 
 import macros
 import strutils, sequtils
-import tables
-import future
+import tables, hashes
 
 export macros
-export strutils, sequtils
+export strutils
+export sequtils
+
+proc openclproc*(name: string = nil) = discard
+proc openclinfix*() = discard
 
 type
+  ManglingIndex* = object
+    procname*: string
+    argtypes*: seq[string]
+    isbuiltin*: bool
   Generator* = ref object
-    indentNum*: int
-    indentSize*: int
+    indentwidth*: int
+    currentindentnum*: int
     isFormat*: bool
+    objects*: Table[string, bool]
+    manglingprocs*: Table[ManglingIndex, string]
+    manglingcount*: int
+    dependsrcs*: seq[string]
+    tmpcount*: int
+  CompSrc* = object
+    generator: Generator
+    before: string
+    src: string
+    after: string
 
-    toplevels*: seq[string] # store struct and external function
-
-    objects*: Table[string, bool] # for object
-    procs*: Table[string, seq[OverloadProc]] # for object
-    variables*: Table[string, string] # for template variable
-
-    isReturn*: bool
-    prevStmts*: seq[string] # for nnkObjConstr and etc...
-
-    count*: int # for gensym
-    tmpinfo*: tuple[s: string, e: string] # for while and `for` stmts
-    iinfo*: string # for while and `for` stmts
-    isInTmpStmt*: bool # for while and `for` stmts
-
-  OverloadProc* = object
-    types*: seq[string]
-    manglingname*: string
-  TypeInfo* = ref object
-    name*: string
-    arraynum*: seq[int]
-  
 type
-  GPGPULanuageError* = object of Exception
+  ProcType* = enum
+    procNormal
+    procInfix
+    procBuiltin
 
-const builtinTypeNames* = @[
-  "float",
-  "float2",
-  "float3",
-  "float4",
-  "int",
-  "char",
-  "ptr float",
-  "ptr float2",
-  "ptr float3",
-  "ptr float4",
-  "ptr int",
-  "bool",
-  "void",
-]
+proc removePostfix*(n: NimNode): NimNode =
+  if n.kind == nnkPostfix:
+    n[1]
+  else:
+    n
 
-const builtinFunctions* = [
-  (name: "getGlobalID", args: @["int"], raw: "get_global_id"),
-  (name: "getLocalID", args: @["int"], raw: "get_local_id"),
+proc newManglingIndex*(procname: string, argtypes: seq[string]): ManglingIndex =
+  result.procname = procname
+  result.argtypes = argtypes
+
+proc hash*(manglingindex: ManglingIndex): Hash =
+  var arr = @[manglingindex.procname]
+  for t in manglingindex.argtypes:
+    arr.add(t)
+  result = hash(arr)
+
+let primitiveprocs* = [
+  (name: "abs", args: @["float"], raw: "fabs"),
+  (name: "abs", args: @["double"], raw: "fabs"),
+  (name: "abs", args: @["int"], raw: "abs"),
+  (name: "sqrt", args: @["float"], raw: "sqrt"),
+  (name: "sqrt", args: @["double"], raw: "sqrt"),
   (name: "dot", args: @["float3", "float3"], raw: "dot"),
   (name: "normalize", args: @["float3"], raw: "normalize"),
-  (name: "abs", args: @["int"], raw: "abs"),
-  (name: "abs", args: @["float"], raw:"fabs"),
-  (name: "sqrt", args: @["float"], raw: "sqrt"),
+  (name: "exp", args: @["float"], raw: "exp"),
+  (name: "exp", args: @["double"], raw: "exp"),
+  (name: "log", args: @["float"], raw: "log"),
+  (name: "log", args: @["double"], raw: "log"),
+  (name: "max", args: @["float", "float"], raw: "max"),
+  (name: "min", args: @["float", "float"], raw: "min"),
+  (name: "max", args: @["double", "double"], raw: "max"),
+  (name: "min", args: @["double", "double"], raw: "min"),
 ]
 
-#
-# Generator
-#
-
-proc newGenerator*(indentSize = 2, isFormat = true): Generator =
-  result = Generator()
-  result.indentNum = 0
-  result.indentSize = indentSize
+proc newGenerator*(isFormat = true, indentwidth = 2): Generator =
+  new result
+  result.indentwidth = indentwidth
+  result.currentindentnum = 0
   result.isFormat = isFormat
-
-  result.toplevels = @[]
-
-  result.procs = initTable[string, seq[OverloadProc]]()
   result.objects = initTable[string, bool]()
-  result.variables = initTable[string, string]()
+  result.manglingprocs = initTable[ManglingIndex, string]()
+  result.manglingcount = 0
+  result.dependsrcs = @[]
+  result.tmpcount = 0
 
-  result.isReturn = false
-  result.prevStmts = @[]
-  result.count = 0
-  result.tmpinfo = (s: nil, e: nil)
-  result.iinfo = nil
-  result.isIntmpStmt = false
+  for primitive in primitiveprocs:
+    result.manglingprocs[newManglingIndex(primitive.name, primitive.args)] = primitive.raw
 
-proc indent*(generator: Generator): string =
-  if generator.isFormat:
-    return repeat(" ", generator.indentSize).repeat(generator.indentNum)
-  else:
-    return ""
-proc newline*(generator: Generator): string =
-  if generator.isFormat:
-    return "\n"
-  else:
-    return ""
-proc inc*(generator: Generator) =
-  generator.indentNum += 1
-proc dec*(generator: Generator) =
-  generator.indentNum -= 1
-proc genSym*(generator: Generator, name: string): string =
-  if name.isAlphaNumeric():
-    result = name & "_gensym_" & $generator.count
-  else:
-    result = "operator_gensym_" & $generator.count
-  generator.count += 1
-proc expand*(generator: Generator): string =
-  if generator.prevStmts.len >= 1:
-    result = generator.prevStmts[^1]
-    generator.prevStmts = generator.prevStmts[0..^2]
-  else:
-    result = ""
-template newProc*(generator: Generator, body: untyped) =
-  var tmpIndentNum = generator.indentNum
-  var tmpReturn = generator.isReturn
-  var tmpPrevStmts = generator.prevStmts
-  var tmpTmpInfo = generator.tmpinfo
-  var tmpiinfo = generator.iinfo
-  var tmpVariables = generator.variables
-  generator.indentNum = 0
-  generator.isReturn = false
-  generator.prevStmts = @[]
-  generator.tmpinfo = (s: nil, e: nil)
-  generator.iinfo = nil
-  generator.variables = initTable[string, string]()
+proc genTmpSym*(generator: Generator): string =
+  result = "_nim2cl_tmp" & $generator.tmpcount
+  generator.tmpcount += 1
+
+proc genIndent*(generator: Generator): string =
+  repeat(" ", generator.indentwidth*generator.currentindentnum)
+
+template indent*(generator: Generator, body: untyped) =
+  generator.currentindentnum += 1
   body
-  generator.indentNum = tmpIndentNum
-  generator.isReturn = tmpReturn
-  generator.prevStmts = tmpPrevStmts
-  generator.tmpinfo = tmpTmpInfo
-  generator.iinfo = tmpiinfo
-  generator.variables = tmpVariables
-template newIndent*(generator: Generator, body: untyped) =
-  var tmpIndentNum = generator.indentNum
-  generator.indentNum = 0
+  generator.currentindentnum -= 1
+
+template reset*(generator: Generator, body: untyped) =
+  let tmpinum = generator.currentindentnum
+  generator.currentindentnum = 0
   body
-  generator.indentNum = tmpIndentNum
+  generator.currentindentnum = tmpinum
 
-#
-# TypeInfo
-#
-
-proc newTypeInfoArray*(s: string, n: seq[int]): TypeInfo =
-  return TypeInfo(name: s, arraynum: n)
-converter toTypeInfo*(s: string): TypeInfo =
-  return TypeInfo(name: s, arraynum: @[])
-proc isArray*(tf: TypeInfo): bool =
-  return tf.arraynum.len != 0
-proc genTypeDecl*(tf: TypeInfo, name: string): string =
-  if tf.isArray():
-    result = "$# $#" % [tf.name, name]
-    for n in tf.arraynum:
-      result &= "[$#]" % $n
+proc format*(generator: Generator, s: string): string =
+  result = s
+  if generator.isFormat:
+    result = result.replace("$i", genIndent(generator))
+    result = result.replace("$n", "\n")
   else:
-    return "$# $#" % [tf.name, name]
+    result = result.replace("$i", "")
+    result = result.replace("$n", "")
 
-#
-# Generate from NimNode
-#
-
-proc gen*(generator: Generator, node: NimNode): string
-proc getTypeNameInside*(generator: Generator, node: NimNode): TypeInfo
-proc getTypeName*(generator: Generator, node: NimNode): TypeInfo
-
-proc genObjectTy*(generator: Generator, node: NimNode, name: string): TypeInfo =
-  let objty = getType(node)
-  if not generator.objects.hasKey(name):
-    if objty.kind == nnkObjectTy:
-      generator.newIndent:
-        var res = ""
-        res &= "typedef struct {" & generator.newline()
-        generator.inc()
-        for field in objty[2].children:
-          res &= generator.indent() & getTypeName(generator, field).genTypeDecl($field) & ";" & generator.newline()
-        generator.dec()
-        res &= "} $#;" % name
-        generator.toplevels.add(res)
-        generator.objects[name] = true
-      return name
-    else:
-      return getTypeNameInside(generator, objty)
+proc genManglingName*(generator: Generator, manglingindex: ManglingIndex): string =
+  if generator.manglingprocs.hasKey(manglingindex):
+    result = generator.manglingprocs[manglingindex]
   else:
-    return name
+    let name = case manglingindex.procname
+      of "+", "-", "*", "/", "%", "<", ">", "<=", ">=", "==", "[]", "[]=":
+        "infix"
+      else:
+        manglingindex.procname
+    result = name & "_" & manglingindex.argtypes.join("_") & "_" & $generator.manglingcount
+    generator.manglingprocs[manglingindex] = result
+    generator.manglingcount += 1
 
-proc getTypeNameInside*(generator: Generator, node: NimNode): TypeInfo =
-  let t = node
-  if t.kind == nnkSym:
-    let s = $node
-    for builtin in builtinTypeNames:
-      if s == builtin:
-        return s
-      elif s == "float32":
-        return "float"
-      elif s == "float64":
-        return "double"
-      elif s == "byte":
-        return "uchar"
-    return genObjectTy(generator, node, s)
-  elif t.kind == nnkBracketExpr:
-    if t[0].repr == t[1].repr:
-      return "__global " & getTypeNameInside(generator, t[1]).name
+proc newCompSrc*(generator: Generator): CompSrc =
+  result.generator = generator
+  result.before = ""
+  result.src = ""
+  result.after = ""
 
-    case $t[0]
-    of "array":
-      var arraynum: seq[int] = @[]
-      var tmpArrNode = t
-      while tmpArrNode.kind == nnkBracketExpr:
-        let startn = tmpArrNode[1][1].intval
-        let endn = tmpArrNode[1][2].intval
-        let num = endn + 1 - startn
-        arraynum.add(num.int)
-        tmpArrNode = tmpArrNode[2]
-      return newTypeInfoArray(getTypeNameInside(generator, tmpArrNode).name, arraynum)
-    of "ptr":
-      return "$#*" % getTypeNameInside(generator, t[1]).name
-    of "ref":
-      return "$#*" % getTypeNameInside(generator, t[1]).name
-    of "Global":
-      return "__global " & getTypeNameInside(generator, t[1]).name
-    of "Local":
-      return "__local " & getTypeNameInside(generator, t[1]).name
-    of "Private":
-      return "__private " & getTypeNameInside(generator, t[1]).name    
-    of "Constant":
-      return "__constant " & getTypeNameInside(generator, t[1]).name
-    of "typeDesc":
-      return getTypeNameInside(generator, t[1])
-    of "var":
-      return getTypeNameInside(generator, t[1])
-    else:
-      raise newException(GPGPULanuageError, "unsupported bracket type: " & t.repr)
+proc `&=`*(comp: var CompSrc, s: string) =
+  comp.src &= comp.generator.format(s)
+
+proc `&=`*(comp: var CompSrc, c: CompSrc) =
+  comp.before &= comp.generator.format(c.before)
+  comp.src &= comp.generator.format(c.src)
+  comp.after &= comp.generator.format(c.after)
+
+proc `$`*(comp: CompSrc): string = comp.before & comp.src & comp.after
+
+proc semicolon*(comp: var CompSrc) =
+  let last = comp.src[^1]
+  if comp.src.len > 0 and last != ';' and last != '}' and last != '{':
+    comp &= ";"
+
+template getSrc*(procname: typed, generator: Generator, n: NimNode): string =
+  var comp = newCompSrc(generator)
+  procname(generator, n, comp)
+  $comp
+
+#
+# generate object from type
+#
+
+#
+# generate from NimNode
+#
+
+proc gen*(generator: Generator, n: NimNode, r: var CompSrc)
+proc genStmtListInside*(generator: Generator, n: NimNode, r: var CompSrc)
+proc genStmtList*(generator: Generator, n: NimNode, r: var CompSrc)
+proc genProcDef*(generator: Generator, n: NimNode, r: var CompSrc, isKernel = false, mangling = false)
+proc genType*(generator: Generator, t: NimNode, r: var CompSrc)
+proc genTypeFromVal*(generator: Generator, t: NimNode, r: var CompSrc)
+
+proc isPrimitiveType(name: string): bool =
+  case name
+  of "float2", "float3", "float4":
+    true
+  else:
+    false
+
+proc genTypeDef*(generator: Generator, n: NimNode, r: var CompSrc) =
+  let name = $n[0]
+
+  if name.isPrimitiveType():
+    r &= name
+    return
+
+  if generator.objects.hasKey(name):
+    r &= name
+    return
+
+  let objty = n[2]
+  if objty.kind != nnkObjectTy:
+    error("($#) is unsupported type def" % $objty.kind, n)
+
+  var typesrc = newCompSrc(generator)
+  typesrc &= "typedef struct {$n"
+  generator.indent:
+    for field in objty[2]:
+      typesrc &= "$i"
+      genType(generator, field[1], typesrc)
+      typesrc &= " "
+      typesrc &= $(field[0].removePostfix())
+      typesrc &= ";$n"
+  typesrc &= "} $#;" % $n[0]
+
+  generator.dependsrcs.add($typesrc)
+  generator.objects[name] = true
+  r &= name
+
+proc genType*(generator: Generator, t: NimNode, r: var CompSrc) =
+  if t.kind == nnkEmpty:
+    r &= "void"
   elif t.kind == nnkPtrTy:
-    return "$#*" % getTypeNameInside(generator, t[0]).name
+    genType(generator, t[0], r)
+    r &= "*"
+  elif t.kind == nnkBracketExpr:
+    case $t[0]
+    of "global":
+      r &= "__global "
+      genType(generator, t[1], r)
+    of "local":
+      r &= "__local "
+      genType(generator, t[1], r)
+    of "private":
+      r &= "__private "
+      genType(generator, t[1], r)
+    of "constant":
+      r &= "__constant "
+      genType(generator, t[1], r)
+    of "var":
+      genType(generator, t[1], r)
+    else:
+      r &= t.repr
+  elif t.kind == nnkSym:
+    let typeimpl = t.symbol.getImpl()
+    if $t == "float64":
+      r &= "double"
+    elif $t == "float32":
+      r &= "float"
+    elif $t == "bool":
+      r &= "int"
+    elif typeimpl.kind == nnkTypeDef:
+      generator.reset:
+        genTypeDef(generator, typeimpl, r)
+    else:
+      r &= t.repr
+  elif t.kind == nnkIdent:
+    r &= $t
   else:
-    raise newException(GPGPULanuageError, "unsupported type: " & t.repr)
+    error "($#) $# is unsupported type: $#" % [t.lineinfo, $t.kind, t.repr], t
+proc genTypeFromVal*(generator: Generator, t: NimNode, r: var CompSrc) =
+  genType(generator, getTypeInst(t), r)
 
-proc getTypeName*(generator: Generator, node: NimNode): TypeInfo =
-  return getTypeNameInside(generator, getTypeInst(node))
-
-proc genStmtListInside*(generator: Generator, body: NimNode): string =
-  result = ""
-  if body.kind == nnkStmtList:
-    for b in body:
-      var s = ""
-      if b.kind == nnkStmtList:
-        s &= genStmtListInside(generator, b) & generator.newline()
-      elif b.kind == nnkDiscardStmt:
-        discard
-      elif b.kind == nnkCommentStmt:
-        discard
-      else:
-        s &= generator.indent() & gen(generator, b) & ";" & generator.newline()
-      result &= generator.expand() & s 
-  elif body.kind == nnkEmpty:
-    discard
-  else:
-    if body.kind == nnkDiscardStmt:
+proc genLetSection*(generator: Generator, n: NimNode, r: var CompSrc) =
+  var letsrcs = newSeq[string]()
+  for e in n.children:
+    let name = e[0]
+    let typ = e[1]
+    let val = e[2]
+    if typ.kind == nnkEmpty and val.kind == nnkEmpty:
       discard
+    elif val.kind == nnkEmpty:
+      letsrcs.add("$# $#" % [getSrc(genType, generator, typ), $name])
     else:
-      let s = generator.indent() & gen(generator, body) & ";" & generator.newline()
-      result = generator.expand() & s
+      genTypeFromVal(generator, val, r)
+      r &= " " & $name & " = "
+      gen(generator, val, r)
+  r &= letsrcs.join(";$n$i")
 
-proc genStmtList*(generator: Generator, body: NimNode): string =
-  generator.inc()
-  result = genStmtListInside(generator, body)
-  generator.dec()
+proc genAsgn*(generator: Generator, n: NimNode, r: var CompSrc) =
+  gen(generator, n[0], r)
+  r &= " = "
+  gen(generator, n[1], r)
 
-proc genPrevStmtList*(generator: Generator, node: NimNode): string =
-  var body = newStmtList()
-  for i in 0..<node.len-1:
-    body.add(node[i])
-  generator.prevStmts.add(genStmtListInside(generator, body))
-  return gen(generator, node[^1])
-
-proc genIdent*(generator: Generator, node: NimNode): string =
-  return $node
-
-proc genTmpSym*(generator: Generator, node: NimNode): string =
-  if ($node).find(":tmp") != -1 or $node == "res":
-    if generator.tmpinfo.s != nil:
-      result = generator.tmpinfo.s
-      # generator.tmpinfo.s = nil
-    elif generator.tmpinfo.e != nil:
-      result = generator.tmpinfo.e
-      # generator.tmpinfo.e = nil
-    else:
-      raise newException(GPGPULanuageError, "tmp error")
-  elif $node == "i":
-    if generator.iinfo != nil:
-      result = generator.iinfo
-      # generator.iinfo = nil
-    else:
-      result = "i"
-  else:
-    if generator.variables.hasKey($node):
-      return generator.variables[$node]
-    else:
-      result = $node
-
-proc genSymbol*(generator: Generator, node: NimNode): string =
-  if generator.isInTmpStmt:
-    result = genTmpSym(generator, node)
-  else:
-    if generator.variables.hasKey($node):
-      return generator.variables[$node]
-    else:
-      result = $node
-
-proc equals*(left: seq[string], right: seq[string]): bool =
-  if left.len != right.len:
-    return false
-  for i in 0..<left.len:
-    if left[i] != right[i]:
-      return false
-  return true
-
-proc genManglingCall*(generator: Generator, procname: string, argtypes: seq[string], argstrs: seq[string]): string =
-  if generator.procs.hasKey(procname):
-    for overloaded in generator.procs[procname]:
-      if equals(argtypes, overloaded.types): 
-        return overloaded.manglingname & "(" & argstrs.join(", ") & ")"
-  return nil
-
-proc genExternalProcCall*(generator: Generator, node: NimNode): string =
-  let procname = $node[0]
-  var argtypes: seq[string] = @[]
-  var argstrs: seq[string] = @[]
-  for i in 1..<node.len:
-    argtypes.add(getTypeName(generator, node[i]).genTypeDecl("mangling"))
-    argstrs.add(gen(generator, node[i]))
-  var res = genManglingCall(generator, procname, argtypes, argstrs)
-  if res != nil:
-    return res
-  else:
-    generator.newProc:
-      generator.toplevels.add(gen(generator, node[0].symbol.getImpl()))
-    result = genManglingCall(generator, procname, argtypes, argstrs)
-    if result == nil:
-      raise newException(GPGPULanuageError, "cannot call mangling proc: " & node.repr)
-
-proc toCLFunctionName*(name: string): string =
-  var s = ""
-  var isPrevLower = false
-  for c in name:
-    if isPrevLower and c.isUpperAscii:
-      s &= "_" & $c.toLowerAscii
-      isPrevLower = false
-    else:
-      s &= $c.toLowerAscii
-      isPrevLower = true
-  return s
-
-proc genEcho*(generator: Generator, node: NimNode): string =
-  result = ""
-  result &= "printf(\""
-  var args = ""
-  for i in 0..<node[1].len:
-    let curnode = node[1][i]
-    case curnode.kind
-    of nnkStrLit:
-      result &= curnode.strval
-    of nnkHiddenCallConv:
-      let typ = getTypeName(generator, curnode[1])
-      case typ.name
-      of "float":
-        result &= "%f"
-      of "double":
-        result &= "%f"
-      of "int":
-        result &= "%i"
-      else:
-        raise newException(GPGPULanuageError, "unsupported echo type ($#)" % typ.name)
-      args &= ", " & gen(generator, curnode[1])
-    else:
-      raise newException(GPGPULanuageError, "unsupported echo type: $# ($#)" % [curnode.repr, $curnode.kind])
-  result &= "\""
-  result &= args
-  result &= ")"
-
-proc genCall*(generator: Generator, node: NimNode): string =
-  case $node[0]
-  of "[]=":
-    result = "$#[$#] = $#" % [gen(generator, node[1]), gen(generator, node[2]), gen(generator, node[3])]
-  of "[]":
-    result = "$#[$#]" % [gen(generator, node[1]), gen(generator, node[2])]
-  of "newFloat2":
-    result = "(float2)($#, $#)" % [generator.gen(node[1]), generator.gen(node[2])]
-  of "newFloat3":
-    result = "(float3)($#, $#, $#)" % [generator.gen(node[1]), generator.gen(node[2]), generator.gen(node[3])]
-  of "newFloat4":
-    result = "(float4)($#, $#, $#, $#)" % [generator.gen(node[1]), generator.gen(node[2]), generator.gen(node[3]), generator.gen(node[4])]
-  of "echo":
-    result = genEcho(generator, node)
-  of "inc":
-    result = "$# += $#" % [genTmpSym(generator, node[1]), gen(generator, node[2])]
-  else:
-    for bf in builtinFunctions:
-      # get arg types
-      var args = newSeq[string]()
-      for i in 1..<node.len:
-        args.add(getTypeName(generator, node[i]).name)
-
-      # if match builtin function
-      if bf.name == $node[0] and equals(args, bf.args):
-        var arggen = newSeq[string]()
-        for i in 1..<node.len:
-          arggen.add(gen(generator, node[i]))
-        return "$#($#)" % [bf.raw, arggen.join(", ")]
-
-    # others
-    result = genExternalProcCall(generator, node)
-
-proc genFloatLit*(generator: Generator, node: NimNode): string =
-  return $node.floatval & "f"
-proc genFloat32Lit*(generator: Generator, node: NimNode): string =
-  return $node.floatval & "f"
-proc genFloat64Lit*(generator: Generator, node: NimNode): string =
-  return $node.floatval & "f"
-
-proc genIntLit*(generator: Generator, node: NimNode): string =
-  if getTypeName(generator, node).name == "bool":
-    if node.boolVal == true:
-      return "1"
-    else:
-      return "0"
-  else:
-    return node.repr
-
-proc genVarSection*(generator: Generator, node: NimNode): string =
-  result = ""
-  var t = if node[0][1].kind == nnkEmpty: getTypeName(generator, node[0][2]) else: $node[0][1]
-  if t.name == "bool":
-    t.name = "int"
-
-  if generator.variables.hasKey($node[0][0]):
-    var sym = generator.genSym($node[0][0])
-    result &= t.genTypeDecl(sym)
-    generator.variables[$node[0][0]] = sym
-  else:
-    result &= t.genTypeDecl($node[0][0])
-    generator.variables[$node[0][0]] = $node[0][0]
-
-  if node[0][2].kind != nnkEmpty:
-    result &= " = "
-    result &= generator.gen(node[0][2])
-
-proc genIfStmt*(generator: Generator, node: NimNode): string =
-  result = ""
-  result &= "if ($#)" % gen(generator, node[0][0])
-  result &= " {" & generator.newline()
-  result &= genStmtList(generator, node[0][1])
-  result &= generator.indent() & "}"
-  for i in 1..<node.len:
-    if node[i].kind == nnkElifBranch:
-      result &= " else if ($#) {" % gen(generator, node[i][0]) & generator.newline()
-      result &= genStmtList(generator, node[i][1])
-      result &= generator.indent() & "}"
-    else:
-      result &= " else {" & generator.newline()
-      result &= genStmtList(generator, node[i][0])
-      result &= generator.indent() & "}"
-
-proc genIfExprBody*(generator: Generator, node: NimNode, tmpname: string): string =
-  result = ""
-  if node.kind == nnkStmtList:
-    var body = newStmtList()
-    for i in 0..<node.len-1:
-      body.add(node[i])
-    result &= genStmtList(generator, body)
-    generator.inc()
-    result &= generator.indent() & "$# = $#;" % [tmpname, gen(generator, node[^1])] & generator.newline()
-    generator.dec()
-  else:
-    generator.inc()
-    result &= generator.indent() & "$# = $#;" % [tmpname, gen(generator, node)] & generator.newline()
-    generator.dec()
-
-proc genIfExpr*(generator: Generator, node: NimNode): string =
-  var s = ""
-  # echo node.treerepr
-  var tmpname = generator.genSym("tmp")
-  if node[0][1].kind == nnkStmtList:
-    s &= generator.indent() & getTypeName(generator, node[0][1][^1]).genTypeDecl(tmpname) & ";" & generator.newline()
-  else:
-    s &= generator.indent() & getTypeName(generator, node[0][1]).genTypeDecl(tmpname) & ";" & generator.newline()
-  s &= generator.indent()
-  s &= "if ($#)" % gen(generator, node[0][0])
-  s &= " {" & generator.newline()
-  s &= genIfExprBody(generator, node[0][1], tmpname)
-  s &= generator.indent() & "}"
-  for i in 1..<node.len:
-    if node[i].kind == nnkElifBranch:
-      s &= " else if ($#) {" % gen(generator, node[i][0]) & generator.newline()
-      s &= genIfExprbody(generator, node[i][1], tmpname)
-      s &= generator.indent() & "}" & generator.newline()
-    else:
-      s &= " else {" & generator.newline()
-      s &= genIfExprBody(generator, node[i][0], tmpname)
-      s &= generator.indent() & "}" & generator.newline()
-  generator.prevStmts.add(s)
-  return tmpname
-
-proc genConv*(generator: Generator, node: NimNode): string =
-  let typ = node[0]
-  let value = node[1]
-  if typ.kind == nnkEmpty:
-    return gen(generator, value)
-  else:
-    return "($#)($#)" % [getTypeNameInside(generator, typ).name, gen(generator, value)]
-
-const builtinInfixTypes* = @[
-  "float",
-  "float2",
-  "float3",
-  "float4",
-  "int",
-]
-
-proc isBulitinInfix*(op: string, left: TypeInfo, right: TypeInfo): bool =
-  if left.isArray() or right.isArray():
-    return false
-  for t in builtinInfixTypes:
-    if left.name == t and right.name == t:
+proc isPrimitiveInfix*(generator: Generator, n: NimNode, r: var CompSrc): bool =
+  let
+    name = $n[0]
+    lefttype = getSrc(genTypeFromVal, generator, n[1])
+    righttype = getSrc(genTypeFromVal, generator, n[2])
+  case name
+  of "+", "-", "*", "/", "%", "+=", "-=", "*=", "/=", "<", ">", "<=", ">=", "==":
+    if lefttype == "float" and righttype == "float":
       return true
-  if left.name == "float" and right.name == "double":
-    return true
-  elif left.name == "double" and right.name == "float":
+    elif lefttype == "float" and righttype == "double":
+      return true
+    elif lefttype == "double" and righttype == "float":
+      return true
+    elif lefttype == "double" and righttype == "double":
+      return true
+    elif lefttype == "int" and righttype == "int":
+      return true
+    else:
+      return false
+  else:
+    return false
+
+proc genInfix*(generator: Generator, n: NimNode, r: var CompSrc) =
+  if isPrimitiveInfix(generator, n, r):
+    r &= "("
+    gen(generator, n[1], r)
+    r &= " $# " % $n[0]
+    gen(generator, n[2], r)
+    r &= ")"
+  elif $n[0] == "and":
+    r &= "("
+    gen(generator, n[1], r)
+    r &= " && "
+    gen(generator, n[2], r)
+    r &= ")"
+  elif $n[0] == "or":
+    r &= "("
+    gen(generator, n[1], r)
+    r &= " || "
+    gen(generator, n[2], r)
+    r &= ")"
+  else:
+    gen(generator, n[0], r)
+    r &= "("
+    gen(generator, n[1], r)
+    r &= ", "
+    gen(generator, n[2], r)
+    r &= ")"
+
+proc genPrefix*(generator: Generator, n: NimNode, r: var CompSrc) =
+  r &= "("
+  case $n[0]
+  of "not":
+    r &= "!"
+    gen(generator, n[1], r)
+  else:
+    error "$# is unsupported prefix" % [$n[0]], n
+  r &= ")"
+
+proc genDotExpr*(generator: Generator, n: NimNode, r: var CompSrc) =
+  gen(generator, n[0], r)
+  r &= "."
+  gen(generator, n[1], r)
+
+proc isPrimitiveCall*(n: NimNode): bool =
+  let name = $n[0]
+  if name == "inc" or name == "dec" or name == "[]" or name == "[]=":
     return true
   else:
     return false
 
-proc genInfix*(generator: Generator, node: NimNode): string =
-  let op = node[0]
-  let left = node[1]
-  let right = node[2]
-  for t in builtinInfixTypes:
-    var lt = getTypeName(generator, left)
-    var rt = getTypeName(generator, right)
-    if isBulitinInfix($op, lt, rt):
-      return "($# $# $#)" % [gen(generator, left), $op, gen(generator, right)]
-    elif $op == "and":
-      return "($# && $#)" % [gen(generator, left), gen(generator, right)]
-    elif $op == "or":
-      return "($# || $#)" % [gen(generator, left), gen(generator, right)]
-  return genExternalProcCall(generator, node)
+proc genPrimitiveCall*(generator: Generator, n: NimNode, r: var CompSrc) =
+  let name = $n[0]
+  if name == "inc":
+    gen(generator, n[1], r)
+    r &= " += "
+    gen(generator, n[2], r)
+  elif name == "dec":
+    gen(generator, n[1], r)
+    r &= " -= "
+    gen(generator, n[2], r)
+  elif name == "[]":
+    gen(generator, n[1], r)
+    r &= "["
+    gen(generator, n[2], r)
+    r &= "]"
+  elif name == "[]=":
+    gen(generator, n[1], r)
+    r &= "["
+    gen(generator, n[2], r)
+    r &= "] = "
+    gen(generator, n[3], r)
+  else:
+    error "unknown primitive call", n
 
-proc genAttributeName*(generator: Generator, typ: NimNode): string =
-  if typ.kind == nnkBracketExpr:
-    case $typ[0]
-    of "Global":
-      return "__global "
-    of "Local":
-      return "__local "
-    of "Private":
-      return "__private "
-    of "Constant":
-      return "__constant "
+proc getManglingIndexFromCall*(generator: Generator, n: NimNode): ManglingIndex =
+  result.procname = $n[0]
+  result.argtypes = @[]
+  for i in 1..<n.len:
+    var typecomp = newCompSrc(generator)
+    genTypeFromVal(generator, n[i], typecomp)
+    result.argtypes.add(($typecomp).replace(" ", ""))
+
+proc genCall*(generator: Generator, n: NimNode, r: var CompSrc) =
+  if isPrimitiveCall(n):
+    genPrimitiveCall(generator, n, r)
+  else:
+    let manglingindex = getManglingIndexFromCall(generator, n)
+    if generator.manglingprocs.hasKey(manglingindex):
+      r &= generator.manglingprocs[manglingindex]
     else:
-      return ""
-  else:
-    return ""
+      gen(generator, n[0], r)
+    r &= "("
+    var args = newSeq[string]()
+    for i in 1..<n.len:
+      var comp = newCompSrc(generator)
+      gen(generator, n[i], comp)
+      args.add($comp)
+    r &= args.join(", ")
+    r &= ")"
 
-proc genArg*(generator: Generator, arg: NimNode): string =
-  result = ""
-  let name = arg[0]
-  let typ = arg[1]
-  result &= getTypeNameInside(generator, typ).genTypeDecl($name)
+proc genWhileStmt*(generator: Generator, n: NimNode, r: var CompSrc) =
+  var condcomp = newCompSrc(generator)
+  gen(generator, n[0], condcomp)
+  r &= "while ("
+  r &= condcomp
+  r &= ") {$n"
+  gen(generator, n[1], r)
+  r &= "$i}$n"
 
-proc genProcDef*(generator: Generator, node: NimNode, mangling = true): string =
-  result = ""
-  let procname = $node[0]
-  let manglingname = if mangling: generator.genSym(procname) else: procname
-  let procret = if node[3][0].kind == nnkEmpty: "void".toTypeInfo() else: getTypeName(generator, node[3][0])
-
-  if procret.isArray():
-    raise newException(GPGPULanuageError, "cannot return array in proc")
-
-  # args
-  var argsstr: seq[string] = @[]
-  var argtypes: seq[string] = @[]
-  for i in 1..<node[3].len:
-    let arg = node[3][i]
-    if arg.len >= 4:
-      let typ = arg[^2]
-      for i in 0..<arg.len-2:
-        argsstr.add(getTypeNameInside(generator, typ).genTypeDecl($arg[i]))
-        argtypes.add(getTypeNameInside(generator, typ).genTypeDecl("mangling"))
+proc genIfStmt*(generator: Generator, n: NimNode, r: var CompSrc) =
+  r &= "if ("
+  gen(generator, n[0][0], r)
+  r &= ") {$n"
+  generator.indent:
+    r &= "$i"
+    gen(generator, n[0][1], r)
+    r &= ";$n"
+  r &= "$i}"
+  for i in 1..<n.len:
+    if n[i].kind == nnkElifBranch:
+      r &= " else if ("
+      gen(generator, n[i][0], r)
+      r &= ") {$n"
+      generator.indent:
+        r &= "$i"
+        gen(generator, n[i][1], r)
+        r &= ";$n"
+      r &= "$i}"
     else:
-      argsstr.add(genArg(generator, node[3][i]))
-      argtypes.add(getTypeNameInside(generator, node[3][i][1]).genTypeDecl("mangling"))
+      r &= " else {$n"
+      generator.indent:
+        r &= "$i"
+        gen(generator, n[i][0], r)
+        r &= ";$n"
+      r &= "$i}"
 
-  # register mangling name to generator
-  if not generator.procs.hasKey(procname):
-    generator.procs[procname] = @[]
-  generator.procs[procname].add(OverloadProc(types: argtypes, manglingname: manglingname))
-
-  # gen decl
-  result &= "$# $#($#)" % [procret.name, manglingname, argsstr.join(", ")]
-  result &= " {" & generator.newline()
-
-  # gen result prologue
-  if procret.name != "void":
-    generator.inc()
-    result &= generator.indent()
-    result &= "$# result;" % [procret.name] 
-    result &= generator.newline()
-    generator.dec()
-
-  # gen body
-  result &= genStmtList(generator, node[6])
-
-  # gen result epilogue
-  if not generator.isReturn and procret.name != "void":
-    generator.inc()
-    result &= generator.indent() & "return result;" & generator.newline()
-    generator.dec()
-  result &= generator.indent() & "}"
-
-proc genReturnStmt*(generator: Generator, node: NimNode): string =
-  generator.isReturn = true
-  if node[0].kind == nnkEmpty:
-    result = "return"
-  elif node[0].kind == nnkAsgn and $node[0][0] == "result":
-    result = ""
-    result &= "result = " & gen(generator, node[0][1]) & ";" & generator.newline() 
-    result &= generator.indent() & "return result"
+proc removeLastExpr*(n: NimNode): NimNode =
+  result = newStmtList()
+  for i in 0..<n.len-1:
+    result.add(n[i])
+proc genLastExpr*(generator: Generator, n: NimNode, r: var CompSrc, rettmpname: string) =
+  generator.indent:
+    r &= "$i"
+    r &= rettmpname & " = "
+    gen(generator, n, r)
+    r &= ";$n"
+proc genTmpVar*(generator: Generator, n: NimNode, r: var CompSrc, rettmpname: string) =
+  generator.indent:
+    var typecomp = newCompSrc(generator)
+    genTypeFromVal(generator, n, typecomp)
+    r.before &= "$i" & $typecomp & " " & rettmpname & ";$n"
+proc genExpr*(generator: Generator, n: NimNode, r: var CompSrc, rettmpname: string) =
+  if n.kind == nnkStmtList or n.kind == nnkStmtListExpr:
+    gen(generator, n.removeLastExpr, r)
+    genLastExpr(generator, n[^1], r, rettmpname)
   else:
-    result = "return $#" % gen(generator, node)
+    genLastExpr(generator, n, r, rettmpname)
 
-proc genAsgn*(generator: Generator, node: NimNode): string =
-  return "$# = $#" % [gen(generator, node[0]), gen(generator, node[1])]
+proc genIfExprInside*(generator: Generator, n: NimNode, r: var CompSrc): string =
+  let rettmpname = genTmpSym(generator)
+  genTmpVar(generator, n[0][1], r, rettmpname)
+  r &= "$iif ("
+  gen(generator, n[0][0], r)
+  r &= ") {$n"
+  genExpr(generator, n[0][1], r, rettmpname)
+  r &= "$i}"
+  for i in 1..<n.len:
+    if n[i].kind == nnkElifBranch:
+      r &= " else if ("
+      gen(generator, n[i][0], r)
+      r &= ") {$n"
+      genExpr(generator, n[i][1], r, rettmpname)
+      r &= "$i}"
+    else:
+      r &= " else {$n"
+      genExpr(generator, n[i][0], r, rettmpname)
+      r &= "$i}$n"
+  return rettmpname
 
-proc genFastAsgn*(generator: Generator, node: NimNode): string =
-  let t = getTypeName(generator, node[1])
-  generator.isInTmpStmt = true
-  result = t.genTypeDecl($node[0]) & " = " & gen(generator, node[1])
-  generator.isInTmpStmt = false
+proc genIfExpr*(generator: Generator, n: NimNode, r: var CompSrc) =
+  var ifcomp = newCompSrc(generator)
+  r &= genIfExprInside(generator, n, ifcomp)
+  r.before &= $ifcomp
 
-proc genSpecialBlock*(generator: Generator, node: NimNode): string =
-  result = ""
-  if node[1][1].kind == nnkFastAsgn and $node[1][1][0] == ":tmp":
-    generator.inc()
+proc genBlockStmt*(generator: Generator, n: NimNode, r: var CompSrc) =
+  r &= "{$n"
+  generator.indent:
+    if n[1].kind == nnkStmtList:
+      genStmtListInside(generator, n[1], r)
+    else:
+      r &= "$i"
+      gen(generator, n[1], r)
+  r &= "$i}"
 
-    generator.isInTmpStmt = true
+proc genBreakStmt*(generator: Generator, n: NimNode, r: var CompSrc) =
+  r &= "break"
 
-    let tmpsyms = generator.genSym("tmp")
-    result &= generator.indent()
-    result &= getTypeName(generator, node[1][1][1]).genTypeDecl(tmpsyms)
-    result &= " = $#;" % gen(generator, node[1][1][1])
-    result &= generator.newline()
-    generator.tmpinfo.s = tmpsyms
+proc genStmtListInside*(generator: Generator, n: NimNode, r: var CompSrc) =
+  for e in n.children:
+    if e.kind == nnkStmtList:
+      genStmtListInside(generator, e, r)
+    else:
+      var comp = newCompSrc(generator)
+      gen(generator, e, comp)
+      r &= comp.before
+      if comp.src != "":
+        r &= "$i"
+        r &= comp.src
+        r.semicolon()
+        r &= "$n"
+      r &= comp.after
 
-    var body = node[1][2]
-    if node[1][2].kind == nnkFastAsgn:
-      let tmpsyme = generator.genSym("tmp")
-      result &= generator.indent()
-      result &= getTypeName(generator, node[1][2][1]).genTypeDecl(tmpsyme)
-      result &= " = $#;" % gen(generator, node[1][2][1])
-      result &= generator.newline()
-      generator.tmpinfo.e = tmpsyme
-      body = node[1][3]
-    if body[0].kind == nnkCommentStmt:
-      body = body[1]
-    # echo body.treerepr
-      
-    var varsection = body[0]
-    let tmpsymi = generator.genSym("i")
-    result &= generator.indent()
-    result &= getTypeName(generator, varsection[0][2]).genTypeDecl(tmpsymi)
-    result &= " = $#;" % gen(generator, varsection[0][2])
-    result &= generator.newline()
-    generator.iinfo = tmpsymi
+proc genStmtList*(generator: Generator, n: NimNode, r: var CompSrc) =
+  generator.indent:
+    genStmtListInside(generator, n, r)
 
-    generator.isInTmpStmt = false
+proc genStmtListExprInside*(generator: Generator, n: NimNode, r: var CompSrc): string =
+  let rettmpname = genTmpSym(generator)
+  genTmpVar(generator, n, r, rettmpname)
+  genExpr(generator, n, r, rettmpname)
+  return rettmpname
+proc genStmtListExpr*(generator: Generator, n: NimNode, r: var CompSrc) =
+  var stmtcomp = newCompSrc(generator)
+  r &= genStmtListExprInside(generator, n, stmtcomp)
+  r.before &= $stmtcomp
 
-    result &= generator.indent() & gen(generator, body[1]) & ";"
+proc genReturnStmt*(generator: Generator, n: NimNode, r: var CompSrc) =
+  gen(generator, n[0], r)
 
-    generator.dec()
+proc genIntLit*(generator: Generator, n: NimNode, r: var CompSrc) =
+  r &= $n.intVal
+
+proc genFloatLit*(generator: Generator, n: NimNode, r: var CompSrc) =
+  r &= $n.floatVal
+
+proc getManglingIndex*(n: NimNode): ManglingIndex =
+  result.procname = $n[0]
+  result.argtypes = @[]
+  let argtypes = n[3]
+  for i in 1..<argtypes.len:
+    if argtypes[i].len == 3:
+      result.argtypes.add(argtypes[i][1].repr.replace(" ", ""))
+    else:
+      for j in 0..<argtypes.len-2:
+        result.argtypes.add(argtypes[i][^2].repr.replace(" ", ""))
+
+proc genSym*(generator: Generator, n: NimNode, r: var CompSrc) =
+  let impl = n.symbol.getImpl()
+  if impl.kind == nnkProcDef:
+    let manglingindex = getManglingIndex(impl)
+    if generator.manglingprocs.hasKey(manglingindex):
+      r &= generator.manglingprocs[manglingindex]
+    else:
+      generator.reset:
+        var proccomp = newCompSrc(generator)
+        genProcDef(generator, impl, proccomp, mangling = true)
+        if $proccomp != "":
+          generator.dependsrcs.add($proccomp)
+        r &= genManglingName(generator, manglingindex)
   else:
-    generator.inc()
-    
-    let varsection = if node[1][1][0].kind == nnkCommentStmt: node[1][1][1][0] else: node[1][1][0]
-    let tmpsymi = generator.genSym("i")
-    result &= generator.indent()
-    result &= getTypeName(generator, varsection[0][2]).genTypeDecl(tmpsymi)
-    result &= " = $#;" % gen(generator, varsection[0][2])
-    result &= generator.newline()
-    generator.tmpinfo.s = tmpsymi
-    generator.tmpinfo.e = tmpsymi
-    generator.iinfo = tmpsymi
+    r &= $n
 
-    let body = if node[1][1][0].kind == nnkCommentStmt: node[1][1][1][1] else: node[1][1][1] 
-    result &= generator.indent() & gen(generator, body) & ";"
+proc genConv*(generator: Generator, n: NimNode, r: var CompSrc) =
+  gen(generator, n[1], r)
 
-    generator.dec()
+proc genHiddenDeref*(generator: Generator, n: NimNode, r: var CompSrc) =
+  gen(generator, n[0], r)
 
-proc genBlockStmt*(generator: Generator, node: NimNode): string =
-  var tmpi = generator.iinfo
-  defer: generator.iinfo = tmpi
-  var tmptmpi = generator.tmpinfo
-  defer: generator.tmpinfo = tmptmpi
-  result = ""
-  result &= "{" & generator.newline()
-  if node[1][0].kind == nnkVarSection and node[1][0][0][2].kind == nnkEmpty:
-    result &= genSpecialBlock(generator, node) & generator.newline()
-    result &= generator.indent() & "}"
+proc genDiscardStmt*(generator: Generator, n: NimNode, r: var CompSrc) =
+  if n.len == 1:
+    gen(generator, n[0], r)
+
+proc genCast*(generator: Generator, n: NimNode, r: var CompSrc) =
+  r &= "(("
+  genType(generator, n[0], r)
+  r &= ")"
+  gen(generator, n[1], r)
+  r &= ")"
+
+proc gen*(generator: Generator, n: NimNode, r: var CompSrc) =
+  case n.kind
+  of nnkLetSection, nnkVarSection: genLetSection(generator, n, r)
+  of nnkAsgn, nnkFastAsgn: genAsgn(generator, n, r)
+  of nnkInfix: genInfix(generator, n, r)
+  of nnkPrefix: genPrefix(generator, n, r)
+  of nnkDotExpr: genDotExpr(generator, n, r)
+  of nnkCall, nnkCommand: genCall(generator, n, r)
+  of nnkWhileStmt: genWhileStmt(generator, n, r)
+  of nnkIfStmt: genIfStmt(generator, n, r)
+  of nnkIfExpr: genIfExpr(generator, n, r)
+  of nnkBlockStmt: genBlockStmt(generator, n, r)
+  of nnkBreakStmt: genBreakStmt(generator, n, r)
+  of nnkStmtList: genStmtList(generator, n, r)
+  of nnkStmtListExpr: genStmtListExpr(generator, n, r)
+  of nnkReturnStmt: genReturnStmt(generator, n, r)
+  of nnkIntLit: genIntLit(generator, n, r)
+  of nnkFloatLit, nnkFloat32Lit, nnkFloat64Lit: genFloatLit(generator, n, r)
+  of nnkSym: genSym(generator, n, r)
+  of nnkConv, nnkHiddenStdConv: genConv(generator, n, r)
+  of nnkHiddenDeref, nnkHiddenAddr: genHiddenDeref(generator, n, r)
+  of nnkDiscardStmt: genDiscardStmt(generator, n, r)
+  of nnkCast: genCast(generator, n, r)
+  of nnkCommentStmt, nnkEmpty: discard
   else:
-    result &= genStmtList(generator, node[1])
-    result &= generator.indent() & "}"
+    error("($#) $# is unsupported NimNode: $#" % [n.lineinfo, $n.kind, n.repr], n)
 
-proc genWhileStmt*(generator: Generator, node: NimNode): string =
-  result = ""
-  generator.isInTmpStmt = true
-  result &= "while ($#)" % gen(generator, node[0])
-  generator.isInTmpStmt = false
-  result &= " {" & generator.newline()
-  result &= genStmtList(generator, node[1])
-  result &= generator.indent() & "}"
+#
+# ProcDef
+#
 
-proc genObjField*(generator: Generator, node: NimNode, varname: string): string =
-  return "$#.$# = $#;" % [varname, $node[0], gen(generator, node[1])]
+proc genRetType*(generator: Generator, n: NimNode, r: var CompSrc) =
+  genType(generator, n[0], r)
 
-proc genObjConstr*(generator: Generator, node: NimNode): string =
-  discard genObjectTy(generator, node[0], $node[0])
-  var tmp = generator.genSym("tmp")
-  var prev = ""
-  prev &= generator.indent() & "$# $#;" % [$node[0], tmp] & generator.newline()
-  for i in 1..<node.len:
-    prev &= generator.indent() & genObjField(generator, node[i], tmp) & generator.newline()
-  generator.prevStmts.add(prev)
-  return tmp
+proc genArgTypes*(generator: Generator, n: NimNode, r: var CompSrc) =
+  var argsrcs = newSeq[string]()
+  for i in 1..<n.len:
+    if n[i].len == 3:
+      argsrcs.add("$# $#" % [getSrc(genType, generator, n[i][1]), $n[i][0]])
+    else:
+      let typ = n[i][^2]
+      for j in 0..<n[i].len-2:
+        let name = n[i][j]
+        argsrcs.add("$# $#" % [getSrc(genType, generator, typ), $name])
+  r &= argsrcs.join(", ")
 
-proc genDotExpr*(generator: Generator, node: NimNode): string =
-  return "$#.$#" % [gen(generator, node[0]), $node[1]]
+proc genResultStart*(generator: Generator, n: NimNode, r: var CompSrc) =
+  let t = getSrc(genType, generator, n)
+  if t != "void":
+    generator.indent:
+      r &= "$i"
+      r &= "$# result;" % t
+      r &= "$n"
+proc genResultEnd*(generator: Generator, n: NimNode, r: var CompSrc) =
+  let t = getSrc(genType, generator, n)
+  if t != "void":
+    generator.indent:
+      r &= "$ireturn result;$n"
 
-proc genBracket*(generator: Generator, node: NimNode): string =
-  var args: seq[string] = @[]
-  for v in node.children:
-    args.add(gen(generator, v))
-  return "{$#}" % args.join(", ")
+proc genBuiltinProc*(generator: Generator, n: NimNode, r: var CompSrc) =
+  let first = if n.body.kind == nnkStmtList: n.body[0] else: n.body
+  let builtinname = if first.len == 1: $n[0] else: first[1].strval
+  var manglingindex = getManglingIndex(n)
+  generator.manglingprocs[manglingindex] = builtinname
 
-proc genBracketExpr*(generator: Generator, node: NimNode): string =
-  return "$#[$#]" % [gen(generator, node[0]), gen(generator, node[1])]
+proc genBuiltinInfix*(generator: Generator, n: NimNode, r: var CompSrc) =
+  var manglingindex = getManglingIndex(n)
+  generator.manglingprocs[manglingindex] = $n[0]
 
-proc genDerefExpr*(generator: Generator, node: NimNode): string =
-  return "(*$#)" % gen(generator, node[0])
-
-proc genPrefix*(generator: Generator, node: NimNode): string =
-  if node[0].repr == "not":
-    return "!($#)" % gen(generator, node[1])
+proc getProcType*(n: NimNode): ProcType =
+  let first = if n.body.kind == nnkStmtList: n.body[0] else: n.body
+  if first.kind == nnkCall and $first[0] == "openclproc":
+    return procBuiltin
+  elif first.kind == nnkCall and $first[0] == "openclinfix":
+    return procInfix
   else:
-    return "$# $#" % [gen(generator, node[0]), gen(generator, node[1])]
+    return procNormal
 
-proc gen*(generator: Generator, node: NimNode): string =
-  case node.kind
-  of nnkLetSection, nnkVarSection:
-    result = genVarSection(generator, node)
-  of nnkCall, nnkCommand:
-    result = genCall(generator, node)
-  of nnkFloatLit:
-    result = genFloatLit(generator, node)
-  of nnkFloat32Lit:
-    result = genFloat32Lit(generator, node)
-  of nnkFloat64Lit:
-    result = genFloat64Lit(generator, node)
-  of nnkIntLit:
-    result = genIntLit(generator, node)
-  of nnkIfStmt:
-    result = genIfStmt(generator, node)
-  of nnkIfExpr:
-    result = genIfExpr(generator, node)
-  of nnkConv, nnkHiddenStdConv:
-    result = genConv(generator, node)
-  of nnkInfix:
-    result = genInfix(generator, node)
-  of nnkIdent:
-    result = genIdent(generator, node)
-  of nnkSym:
-    result = genSymbol(generator, node)
-  of nnkProcDef:
-    result = genProcDef(generator, node)
-  of nnkReturnStmt: 
-    result = genReturnStmt(generator, node)
-  of nnkAsgn:
-    result = genAsgn(generator, node)
-  of nnkFastAsgn:
-    result = genFastAsgn(generator, node)
-  of nnkBlockStmt:
-    result = genBlockStmt(generator, node)
-  of nnkWhileStmt:
-    result = genWhileStmt(generator, node)
-  of nnkObjConstr:
-    result = genObjConstr(generator, node)
-  of nnkDotExpr:
-    result = genDotExpr(generator, node)
-  of nnkBracket:
-    result = genBracket(generator, node)
-  of nnkBracketExpr:
-    result = genBracketExpr(generator, node)
-  of nnkDerefExpr:
-    result = genDerefExpr(generator, node)
-  of nnkPrefix:
-    result = genPrefix(generator, node)
-  of nnkHiddenAddr:
-    result = gen(generator, node[0])
-  of nnkBreakStmt:
-    result = "break"
-  of nnkStmtList, nnkStmtListExpr:
-    result = genPrevStmtList(generator, node)
+proc genProcDef*(generator: Generator, n: NimNode, r: var CompSrc, isKernel = false, mangling = false) =
+  case getProcType(n)
+  of procBuiltin:
+    genBuiltinProc(generator, n, r)
+    return
+  of procInfix:
+    genBuiltinInfix(generator, n, r)
+    return
+  of procNormal:
+    discard
+
+  if isKernel:
+    r &= "__kernel "
+  genRetType(generator, n[3], r)
+  r &= " "
+  if mangling:
+    let manglingindex = getManglingIndex(n)
+    r &= genManglingName(generator, manglingindex)
   else:
-    raise newException(GPGPULanuageError, "unsupported expression: " & node.repr & "(" & $node.kind & ")")
+    r &= $n[0]
+  r &= "("
+  genArgTypes(generator, n[3], r)
+  r &= ") {$n"
+  genResultStart(generator, n[3][0], r)
+  if n.body.kind == nnkStmtList:
+    genStmtList(generator, n.body, r)
+  else:
+    let newbody = newStmtList(n.body)
+    genStmtList(generator, newbody, r)
+  genResultEnd(generator, n[3][0], r)
+  r &= "}"
 
-proc genKernel*(generator: Generator, node: NimNode): string =
-  result = ""
-  let procimpl = node.symbol.getImpl()
-  # echo procimpl.repr
-  # echo procimpl.treeRepr
-  result &= "__kernel "
-  result &= genProcDef(generator, procimpl, mangling = false)
+#
+# macros
+#
 
-macro getSymbol*(node: typed): untyped =
-  return node.symbol
+macro genCLKernelSource*(procname: typed): untyped =
+  # echo procname.symbol.getImpl().treerepr
+  let generator = newGenerator()
+  var comp = newCompSrc(generator)
+  genProcDef(generator, procname.symbol.getImpl(), comp, isKernel = true)
+  var srcs = generator.dependsrcs
+  srcs.add($comp)
+  result = newStrLitNode(srcs.join("\n"))
 
-macro getKernel*(kernelname: varargs[typed, getSymbol], indentSize = 2, isFormat = true): untyped =
-  var generator = newGenerator(indentSize.intval.int, isFormat.boolval)
-  var kernelsrc = genKernel(generator, kernelname)
-  var src = concat(generator.toplevels, @[kernelsrc]).join("\n")
-  return newStrLitNode(src)
-
-macro defProgram*(name: untyped, body: untyped): untyped =
+macro defineProgram*(name: untyped, body: untyped): untyped =
   name.expectKind(nnkIdent)
-  for kernel in body.children:
+  for kernel in body:
     kernel.expectKind(nnkIdent)
+  
+  var genmacro = parseExpr("macro gen$#*(): untyped = discard" % $name)
+  genmacro[6] = newStmtList()
+  genmacro[6].add(parseExpr("var tmpsrcs: seq[string] = @[]"))
+  genmacro[6].add(parseExpr("var generator = newGenerator()"))
+  for kernel in body:
+    var kernelstmt = newStmtList()
+    kernelstmt.add(parseExpr("var $1 = bindSym(\"$1\")" % $kernel))
+    kernelstmt.add(parseExpr("var comp = newCompSrc(generator)"))
+    kernelstmt.add(parseExpr("genProcDef(generator, $#.symbol.getImpl(), comp, isKernel = true)" % $kernel))
+    kernelstmt.add(parseExpr("tmpsrcs.add($comp)"))
+    genmacro[6].add(newBlockStmt(kernelstmt))
+  genmacro[6].add(parseExpr("return newStrLitNode(concat(generator.dependsrcs, tmpsrcs).join(\"\\n\"))"))
 
-  var genstr = ""
-  genstr &= "macro gen$#*(): untyped =\n" % $name
-  genstr &= "  var tmpsrcs: seq[string] = @[]\n"
-  genstr &= "  var generator = newGenerator()\n"
-  for kernel in body.children:
-    genstr &= "  var $1 = bindSym(\"$1\")\n" % $kernel
-  for kernel in body.children:
-    genstr &= "  tmpsrcs.add(genKernel(generator, $#))\n" % $kernel
-  genstr &= "  return newStrLitNode(concat(generator.toplevels, tmpsrcs).join(\"\\n\"))\n"
-  return genstr.parseStmt()
+  return genmacro
 
-template getProgram*(name: untyped): string =
-  `gen name`
+template genProgram*(programname: untyped): string =
+  `gen programname`()
+
+macro kernel*(procdef: typed): untyped =
+  let procname = if procdef.kind == nnkPostfix:
+                    procdef[0][1]
+                  else:
+                    procdef[0]
+  result = quote do:
+    defaultKernelBuilder(genCLKernelSource(`procname`))
