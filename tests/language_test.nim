@@ -28,6 +28,26 @@ __kernel void fortest() {
   }
 }"""
 
+proc fortest2() =
+  var n = 10
+  for i in -n..n:
+    var a = i
+const fortest2Src = """
+__kernel void fortest2() {
+  int n = 10;
+  {
+    int i;
+    int res0 = (-n);
+    {
+      while ((res0 <= n)) {
+        i = res0;
+        int a = i;
+        res0 += 1;
+      }
+    }
+  }
+}"""
+
 proc iftest() =
   let x = true
   if x:
@@ -90,7 +110,7 @@ proc casttest() =
   let xi = cast[int](xf)
 const casttestSrc = """
 __kernel void casttest() {
-  float xf = 1.0;
+  double xf = 1.0;
   int xi = ((int)xf);
 }"""
 
@@ -180,6 +200,8 @@ suite "nim2cl basic test":
     check genCLKernelSource(vartest) == vartestSrc
   test "for":
     check genCLKernelSource(fortest) == fortestSrc
+  test "for2":
+    check genCLKernelSource(fortest2) == fortest2Src
   test "if":
     check genCLKernelSource(iftest) == iftestSrc
   test "external proc":
