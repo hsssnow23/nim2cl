@@ -46,6 +46,8 @@ proc sqrt*(x: float): float =
 proc log*(x: float): float =
   discard # TODO: sqrt in gpgpu emulator
 
+proc printf*(s: string, args: varargs[string, `$`]) = discard
+
 proc newFloat2*(x, y: float32): float2 =
   result.x = x
   result.y = y

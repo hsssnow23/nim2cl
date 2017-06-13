@@ -24,8 +24,8 @@ __kernel void fortest() {
         int a = i;
         i += 1;
       }
-    }
-  }
+    };
+  };
 }"""
 
 proc fortest2() =
@@ -44,16 +44,16 @@ __kernel void fortest2() {
         int a = i;
         res0 += 1;
       }
-    }
-  }
+    };
+  };
 }"""
 
 proc iftest() =
   let x = true
   if x:
-    discard
+    var a = 1
   else:
-    discard
+    var a = 2
   let y = if x:
             1
           else:
@@ -62,8 +62,10 @@ const iftestSrc = """
 __kernel void iftest() {
   int x = 1;
   if (x) {
+    int a = 1;
   } else {
-  }
+    int a = 2;
+  };
   int _nim2cl_tmp0;
   if (x) {
     _nim2cl_tmp0 = 1;
@@ -191,8 +193,8 @@ __kernel void fortest() {
         int a = i;
         i += 1;
       }
-    }
-  }
+    };
+  };
 }"""
 
 suite "nim2cl basic test":
