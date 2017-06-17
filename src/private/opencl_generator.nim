@@ -59,6 +59,7 @@ let primitiveprocs* = [
   (name: "abs", args: @["float"], raw: "fabs"),
   (name: "abs", args: @["double"], raw: "fabs"),
   (name: "abs", args: @["int"], raw: "abs"),
+  (name: "abs", args: @["float3"], raw: "fabs"),
   (name: "sqrt", args: @["float"], raw: "sqrt"),
   (name: "sqrt", args: @["double"], raw: "sqrt"),
   (name: "dot", args: @["float3", "float3"], raw: "dot"),
@@ -71,6 +72,7 @@ let primitiveprocs* = [
   (name: "min", args: @["float", "float"], raw: "min"),
   (name: "max", args: @["double", "double"], raw: "max"),
   (name: "min", args: @["double", "double"], raw: "min"),
+  (name: "max", args: @["float3", "float"], raw: "max"),
   (name: "printf", args: @[], raw: "printf")
 ]
 

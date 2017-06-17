@@ -7,8 +7,8 @@ type
   float2* = object
     x*: float32
     y*: float32
-    space1: float32
-    space2: float32
+    # space1: float32
+    # space2: float32
   float3* = object
     x*: float32
     y*: float32
@@ -40,6 +40,10 @@ proc dot*(left: float3, right: float3): float =
 proc normalize*(vec: float3): float3 =
   discard # TODO: normalize in gpgpu emulator
 proc abs*(x: int): float =
+  discard # TODO: fabs in gpgpu emulator
+proc abs*(x: float3): float3 =
+  discard # TODO: fabs in gpgpu emulator
+proc max*(x: float3, y: float): float3 =
   discard # TODO: fabs in gpgpu emulator
 proc sqrt*(x: float): float =
   discard # TODO: sqrt in gpgpu emulator
