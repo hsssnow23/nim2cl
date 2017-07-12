@@ -1,6 +1,6 @@
 
 import macros, macro_utils
-import strutils
+import strutils, sequtils
 import opencl_generator
 
 type
@@ -78,8 +78,7 @@ proc log*(x: float): float =
 proc log*(x: float32): float32 =
   openclproc("log") # TODO: log in gpgpu emulator
 
-proc printf*(s: string, args: varargs[string, `$`]) =
-  openclproc("printf")
+proc printf*(s: string, args: varargs[string, `$`]) {.importc: "printf", header: "stdio.h", varargs.}
 
 #
 # constructors
@@ -110,7 +109,7 @@ macro implCLType*(T: typed): untyped =
   result.add(quote do:
     proc `setop`*(parray: ptr `T`, index: int, value: `T`) =
       cast[ptr array[0, `T`]](parray)[index] = value
-    proc `accessop`*(parray: ptr `T`, index: int): `T` =
+    proc `accessop`*(parray: ptr `T`, index: int): var `T` =
       return cast[ptr array[0, `T`]](parray)[index]
   )
 
@@ -122,3 +121,41 @@ implCLType(int32)
 implCLType(int)
 implCLType(char)
 implCLType(byte)
+
+#
+# Emulator
+#
+
+proc execKernelProc*(gworks: array[1, int], lworks: array[1, int], closure: proc ()) =
+  for x in countup(0, gworks[0]-1, lworks[0]):
+    for i in 0..<lworks[0]:
+      currentGlobalID = @[x]
+      currentLocalID = @[i]
+      closure()
+proc execKernelProc*(gworks: array[2, int], lworks: array[2, int], closure: proc ()) =
+  for x in countup(0, gworks[0]-1, lworks[0]):
+    for y in countup(0, gworks[1]-1, lworks[1]):
+      for i in 0..<lworks[0]:
+        for j in 0..<lworks[1]:
+          currentGlobalID = @[x, y]
+          currentLocalID = @[i, j]
+          closure()
+proc execKernelProc*(gworks: array[3, int], lworks: array[3, int], closure: proc ()) =
+  for x in countup(0, gworks[0]-1, lworks[0]):
+    for y in countup(0, gworks[1]-1, lworks[1]):
+      for z in countup(0, gworks[2]-1, lworks[2]):
+        for i in 0..<lworks[0]:
+          for j in 0..<lworks[1]:
+            for k in 0..<lworks[2]:
+              currentGlobalID = @[x, y, z]
+              currentLocalID = @[i, j, k]
+              closure()
+
+macro execKernel*(kernel: typed, gworks: typed, lworks: typed, args: varargs[untyped]): untyped =
+  result = newStmtList()
+  var call = nnkCall.newTree(kernel)
+  for arg in args:
+    call.add(arg)
+  result.add(parseExpr("execKernelProc($#, $#, proc () = $#)" % [
+    gworks.repr, lworks.repr, call.repr
+  ]))

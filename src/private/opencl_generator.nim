@@ -384,7 +384,7 @@ proc getManglingIndexFromCall*(generator: Generator, n: NimNode): ManglingIndex 
 
 proc genCall*(generator: Generator, n: NimNode, r: var CompSrc) =
   if $n[0] == "printf":
-    gen(generator, n[0], r)
+    r &= $n[0]
     r &= "("
     gen(generator, n[1], r)
     for i in 0..<n[2].len:

@@ -202,6 +202,9 @@ proc primitivetest() =
   discard nim2cl.max(1.0'f32, 2.0'f32)
   discard nim2cl.min(1.0, 2.0)
   discard nim2cl.max(1.0'f32, 2.0'f32)
+  discard nim2cl.abs(1)
+  discard nim2cl.abs(1.0)
+  discard nim2cl.abs(1.0'f32)
   printf("Hello %d!\n", 1, 2)
   let n = 1
   printf("Hello %d!\n", n)
@@ -219,6 +222,9 @@ __kernel void primitivetest() {
   max(1.0, 2.0);
   min(1.0, 2.0);
   max(1.0, 2.0);
+  abs(1);
+  fabs(1.0);
+  fabs(1.0);
   printf("Hello %d!\n", 1, 2);
   int n = 1;
   printf("Hello %d!\n", n);
