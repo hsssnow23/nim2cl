@@ -37,9 +37,9 @@ __kernel void fortest2() {
   int n = 10;
   {
     int i;
-    int res0 = (-n);
+    int res0 = ((int)(-n));
     {
-      while ((res0 <= n)) {
+      while ((res0 <= ((int)n))) {
         i = res0;
         int a = i;
         res0 += 1;
@@ -98,7 +98,7 @@ float add5_float_0(float x) {
   return result;
 }
 __kernel void convtest() {
-  add5_float_0(1.0);
+  ((float)add5_float_0(1.0));
 }"""
 
 proc ptrtest(vals: global[ptr float]) =
@@ -197,6 +197,34 @@ __kernel void fortest() {
   };
 }"""
 
+proc primitivetest() =
+  discard nim2cl.min(1.0, 2.0)
+  discard nim2cl.max(1.0'f32, 2.0'f32)
+  discard nim2cl.min(1.0, 2.0)
+  discard nim2cl.max(1.0'f32, 2.0'f32)
+  printf("Hello %d!\n", 1, 2)
+  let n = 1
+  printf("Hello %d!\n", n)
+  discard dot(newFloat3(1.0, 1.0, 1.0), newFloat3(1.0, 1.0, 1.0))
+const primitiveSrc = """
+float3 newFloat3__0(float x, float y, float z) {
+  float3 result;
+  result.x = x;
+  result.y = y;
+  result.z = z;
+  return result;
+}
+__kernel void primitivetest() {
+  min(1.0, 2.0);
+  max(1.0, 2.0);
+  min(1.0, 2.0);
+  max(1.0, 2.0);
+  printf("Hello %d!\n", 1, 2);
+  int n = 1;
+  printf("Hello %d!\n", n);
+  dot(newFloat3__0(1.0, 1.0, 1.0), newFloat3__0(1.0, 1.0, 1.0));
+}"""
+
 suite "nim2cl basic test":
   test "var":
     check genCLKernelSource(vartest) == vartestSrc
@@ -224,3 +252,5 @@ suite "nim2cl basic test":
     check genCLKernelSource(externalinfixtest) == externalinfixSrc
   test "defineProgram":
     check genProgram(forandvar) == forandvarSrc
+  test "primitive":
+    check genCLKernelSource(primitivetest) == primitiveSrc

@@ -55,27 +55,6 @@ proc hash*(manglingindex: ManglingIndex): Hash =
     arr.add(t)
   result = hash(arr)
 
-let primitiveprocs* = [
-  (name: "abs", args: @["float"], raw: "fabs"),
-  (name: "abs", args: @["double"], raw: "fabs"),
-  (name: "abs", args: @["int"], raw: "abs"),
-  (name: "abs", args: @["float3"], raw: "fabs"),
-  (name: "sqrt", args: @["float"], raw: "sqrt"),
-  (name: "sqrt", args: @["double"], raw: "sqrt"),
-  (name: "dot", args: @["float3", "float3"], raw: "dot"),
-  (name: "normalize", args: @["float3"], raw: "normalize"),
-  (name: "exp", args: @["float"], raw: "exp"),
-  (name: "exp", args: @["double"], raw: "exp"),
-  (name: "log", args: @["float"], raw: "log"),
-  (name: "log", args: @["double"], raw: "log"),
-  (name: "max", args: @["float", "float"], raw: "max"),
-  (name: "min", args: @["float", "float"], raw: "min"),
-  (name: "max", args: @["double", "double"], raw: "max"),
-  (name: "min", args: @["double", "double"], raw: "min"),
-  (name: "max", args: @["float3", "float"], raw: "max"),
-  (name: "printf", args: @[], raw: "printf")
-]
-
 proc newGenerator*(isFormat = true, indentwidth = 2): Generator =
   new result
   result.indentwidth = indentwidth
@@ -88,9 +67,6 @@ proc newGenerator*(isFormat = true, indentwidth = 2): Generator =
   result.tmpcount = 0
   result.currentresname = ""
   result.rescount = 0
-
-  for primitive in primitiveprocs:
-    result.manglingprocs[newManglingIndex(primitive.name, primitive.args)] = primitive.raw
 
 proc genTmpSym*(generator: Generator): string =
   result = "_nim2cl_tmp" & $generator.tmpcount
@@ -296,8 +272,6 @@ proc genFastAsgn*(generator: Generator, n: NimNode, r: var CompSrc) =
     generator.currenttmp = newCompSrc(generator)
     gen(generator, n[1], generator.currenttmp)
   else:
-    genTypeFromVal(generator, n[0], r)
-    r &= " "
     gen(generator, n[0], r)
     r &= " = "
     gen(generator, n[1], r)
@@ -409,6 +383,19 @@ proc getManglingIndexFromCall*(generator: Generator, n: NimNode): ManglingIndex 
     result.argtypes.add(($typecomp).replace(" ", ""))
 
 proc genCall*(generator: Generator, n: NimNode, r: var CompSrc) =
+  if $n[0] == "printf":
+    gen(generator, n[0], r)
+    r &= "("
+    gen(generator, n[1], r)
+    for i in 0..<n[2].len:
+      r &= ", "
+      if n[2][i].kind == nnkStrLit:
+        r &= $n[2][i]
+      else:
+        gen(generator, n[2][i], r)
+    r &= ")"
+    return
+
   if isPrimitiveCall(n):
     genPrimitiveCall(generator, n, r)
   else:
@@ -510,7 +497,7 @@ proc genBlockStmt*(generator: Generator, n: NimNode, r: var CompSrc) =
   r &= "{\n"
   generator.indent:
     if n[1].kind == nnkStmtList and n[1][0].kind == nnkVarSection and n[1][0].len == 2:
-      r &= generator.genIndent() & "int " & $n[1][0][0][0] & ";\n" 
+      r &= generator.genIndent() & "int " & $n[1][0][0][0] & ";\n"
 
     if n[1].kind == nnkStmtList:
       genStmtListInside(generator, n[1], r)
@@ -572,7 +559,7 @@ proc genStrLit*(generator: Generator, n: NimNode, r: var CompSrc) =
 
 proc genBracket*(generator: Generator, n: NimNode, r: var CompSrc) =
   var args = newSeq[string]()
-  for e in n:
+  for e in n.children:
     var comp = newCompSrc(generator)
     gen(generator, e, comp)
     args.add($comp)
@@ -788,11 +775,3 @@ macro defineProgram*(name: untyped, body: untyped): untyped =
 
 template genProgram*(programname: untyped): string =
   `gen programname`()
-
-macro kernel*(procdef: typed): untyped =
-  let procname = if procdef.kind == nnkPostfix:
-                    procdef[0][1]
-                  else:
-                    procdef[0]
-  result = quote do:
-    defaultKernelBuilder(genCLKernelSource(`procname`))
