@@ -1,6 +1,7 @@
 
 import unittest
 import nim2cl
+import nim2cl.math
 
 proc vartest() =
   var x = 1
@@ -198,13 +199,13 @@ __kernel void fortest() {
 }"""
 
 proc primitivetest() =
-  discard nim2cl.min(1.0, 2.0)
-  discard nim2cl.max(1.0'f32, 2.0'f32)
-  discard nim2cl.min(1.0, 2.0)
-  discard nim2cl.max(1.0'f32, 2.0'f32)
-  discard nim2cl.abs(1)
-  discard nim2cl.abs(1.0)
-  discard nim2cl.abs(1.0'f32)
+  discard math.min(1.0, 2.0)
+  discard math.max(1.0'f32, 2.0'f32)
+  discard math.min(1.0, 2.0)
+  discard math.max(1.0'f32, 2.0'f32)
+  discard math.abs(1)
+  discard math.abs(1.0)
+  discard math.abs(1.0'f32)
   printf("Hello %d!\n", 1, 2)
   let n = 1
   printf("Hello %d!\n", n)
