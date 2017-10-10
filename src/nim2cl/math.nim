@@ -21,17 +21,23 @@ proc exp*(x: float32): float32 =
   openclproc("exp") # TODO: exp in gpgpu emulator
 
 proc min*(x: float, y: float): float =
-  openclproc("min") # TODO: min in gpgpu emulator
+  openclproc("min")
+  return system.min(x, y)
 proc max*(x: float, y: float): float =
-  openclproc("max") # TODO: max in gpgpu emulator
+  openclproc("max")
+  return system.max(x, y)
 proc min*(x: float32, y: float32): float32 =
-  openclproc("min") # TODO: min in gpgpu emulator
+  openclproc("min")
+  return system.min(x, y)
 proc max*(x: float32, y: float32): float32 =
-  openclproc("max") # TODO: max in gpgpu emulator
-proc min*(x: float3, y: float): float3 =
-  openclproc("min") # TODO: min in gpgpu emulator
-proc max*(x: float3, y: float): float3 =
-  openclproc("max") # TODO: max in gpgpu emulator
+  openclproc("max")
+  return system.max(x, y)
+proc min*(v: float3, s: float): float3 =
+  openclproc("min")
+  return newFloat3(system.min(v.x, s), system.min(v.y, s), system.min(v.z, s))
+proc max*(v: float3, s: float): float3 =
+  openclproc("max")
+  return newFloat3(system.max(v.x, s), system.max(v.y, s), system.max(v.z, s))
 
 proc sqrt*(x: float): float =
   openclproc("sqrt") # TODO: sqrt in gpgpu emulator

@@ -29,14 +29,17 @@ type
 var currentGlobalID = @[0]
 var currentLocalID = @[0]
 
-proc getGlobalID*(index: int): int = # TODO: getGlobalID in gpgpu emulator
+proc getGlobalID*(index: int): int {.clproc.} =
   openclproc("get_global_id")
   return currentGlobalID[index]
-proc getLocalID*(index: int): int = # TODO: getLocalID in gpgpu emulator
+proc getLocalID*(index: int): int =
   openclproc("get_global_id")
   return currentLocalID[index]
 
-proc printf*(s: string, args: varargs[string, `$`]) {.importc: "printf", header: "stdio.h", varargs.}
+proc rawprintf*(s: cstring) {.importc: "printf", header: "stdio.h", varargs.}
+proc printf*(s: string, args: varargs[string, `$`]) {.clproc.} =
+  when not inKernel:
+    rawprintf(s, args)
 
 #
 # constructors

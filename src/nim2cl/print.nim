@@ -1,9 +1,31 @@
 
 import ../nim2cl
+import macros
 
-proc print*(vec: float2) =
-  printf("(x:%f, y: %f)", vec.x, vec.y)
-proc print*(vec: float3) =
-  printf("(x:%f, y: %f, z: %f)", vec.x, vec.y, vec.z)
-proc print*(vec: float4) =
-  printf("(x:%f, y: %f, z: %f, w: %f)", vec.x, vec.y, vec.z, vec.w)
+macro prints*(args: varargs[untyped]): untyped =
+  result = newStmtList()
+  for arg in args:
+    result.add(parseExpr("print($#)" % arg.repr))
+macro printsCLProc*(args: varargs[untyped]): untyped =
+  result = newStmtList()
+  for arg in args:
+    result.add(parseExpr("printCLProc($#)" % arg.repr))
+# implCLMacro(prints)
+
+proc print*(s: string) {.clproc.} =
+  when inKernel:
+    printf(s)
+  else:
+    stdout.write(s)
+proc print*(s: float32) {.clproc.} =
+  when inKernel:
+    printf("%f", s)
+  else:
+    stdout.write($s)
+
+proc print*(vec: float2) {.clproc.} =
+  prints("(x", vec.x, ", y: ", vec.y, ")")
+proc print*(vec: float3) {.clproc.} =
+  prints("(x", vec.x, ", y: ", vec.y, ", z:", vec.z, ")")
+proc print*(vec: float4) {.clproc.} =
+  prints("(x", vec.x, ", y: ", vec.y, ", z:", vec.z, ", w:", vec.w, ")")

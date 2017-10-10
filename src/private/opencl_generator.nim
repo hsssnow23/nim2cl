@@ -7,6 +7,8 @@ export macros
 export strutils
 export sequtils
 
+var inKernel* {.compileTime.} = false
+
 proc openclproc*(name: string = nil) = discard
 proc openclinfix*() = discard
 
@@ -167,7 +169,7 @@ proc genTypeDef*(generator: Generator, n: NimNode, r: var CompSrc) =
 
   let objty = n[2]
   if objty.kind != nnkObjectTy:
-    error("($#) is unsupported type def" % $objty.kind, n)
+    error("($#) is unsupported type def: $#" % [$objty.kind, n.repr], n)
 
   var typesrc = newCompSrc(generator)
   typesrc &= "typedef struct {\n"
@@ -214,6 +216,8 @@ proc genType*(generator: Generator, t: NimNode, r: var CompSrc) =
       r &= "double"
     elif $t == "float32":
       r &= "float"
+    elif $t == "string":
+      r &= "char*"
     elif $t == "bool":
       r &= "int"
     elif typeimpl.kind == nnkTypeDef:
@@ -383,8 +387,8 @@ proc getManglingIndexFromCall*(generator: Generator, n: NimNode): ManglingIndex 
     result.argtypes.add(($typecomp).replace(" ", ""))
 
 proc genCall*(generator: Generator, n: NimNode, r: var CompSrc) =
-  if $n[0] == "printf":
-    r &= $n[0]
+  if $n[0] == "printfCLProc":
+    r &= "printf"
     r &= "("
     gen(generator, n[1], r)
     for i in 0..<n[2].len:
@@ -744,7 +748,7 @@ proc genProcDef*(generator: Generator, n: NimNode, r: var CompSrc, isKernel = fa
 # macros
 #
 
-macro genCLKernelSource*(procname: typed): untyped =
+macro genCLKernelSourceMacro*(procname: typed): untyped =
   # echo procname.symbol.getImpl().treerepr
   let generator = newGenerator()
   var comp = newCompSrc(generator)
@@ -752,6 +756,8 @@ macro genCLKernelSource*(procname: typed): untyped =
   var srcs = generator.dependsrcs
   srcs.add($comp)
   result = newStrLitNode(srcs.join("\n"))
+template genCLKernelSource*(procname: untyped): untyped =
+  genCLKernelSourceMacro(`procname Kernel`)
 
 macro defineProgram*(name: untyped, body: untyped): untyped =
   name.expectKind(nnkIdent)
@@ -775,3 +781,88 @@ macro defineProgram*(name: untyped, body: untyped): untyped =
 
 template genProgram*(programname: untyped): string =
   `gen programname`()
+
+proc convertToCLProc*(node: NimNode): NimNode {.compileTime.} =
+  if node.kind in AtomicNodes:
+    result = node
+  elif node.kind == nnkWhenStmt:
+    result = nnkWhenStmt.newTree()
+    for branch in node.children:
+      if branch.kind == nnkElifBranch:
+        var branchcopy = branch.copy
+        branchcopy[1] = convertToCLProc(branch[1])
+        result.add(branchcopy)
+      else:
+        result.add(branch)
+  elif node.kind in nnkCallKinds:
+    if node[0].kind == nnkDotExpr:
+      result = node.kind.newTree(nnkDotExpr.newTree(node[0][0], ident($node[0][1] & "CLProc")))
+    else:
+      if $node[0] == "openclproc":
+        result = node.kind.newTree(node[0])
+      else:
+        result = node.kind.newTree(ident($node[0] & "CLProc"))
+    for i in 1..<node.len:
+      result.add(convertToCLProc(node[i]))
+  else:
+    result = node.kind.newTree()
+    for e in node.children:
+      result.add(convertToCLProc(e))
+
+macro clproconly*(procdef: untyped): untyped =
+  let clprocname = ident($procdef[0].removePostfix() & "CLProc")
+  var clprocdef = procdef.copy
+  clprocdef[0] = if procdef[0].kind == nnkPostfix:
+                       clprocname.postfix("*")
+                     else:
+                       clprocname
+  clprocdef[6] = convertToCLProc(procdef[6])
+  result = quote do:
+    static:
+      inKernel = true
+    `clprocdef`
+    static:
+      inKernel = false
+  echo result.repr
+
+macro implCLMacro*(macroname: untyped): untyped =
+  let clprocid = ident($macroname & "CLProc").postfix("*")
+  result = quote do:
+    template `clprocid`(args: varargs[untyped]): untyped =
+      `macroname`(args)
+
+macro clproc*(procdef: untyped): untyped =
+  let clprocname = ident($procdef[0].removePostfix() & "CLProc")
+  var clprocdef = procdef.copy
+  clprocdef[0] = if procdef[0].kind == nnkPostfix:
+                       clprocname.postfix("*")
+                     else:
+                       clprocname
+  clprocdef[6] = convertToCLProc(procdef[6])
+  result = quote do:
+    static:
+      inKernel = false
+    `procdef`
+    static:
+      inKernel = true
+    `clprocdef`
+    static:
+      inKernel = false
+
+macro kernel*(procdef: untyped): untyped =
+  let kernelprocname = ident($procdef[0].removePostfix() & "Kernel")
+  var kernelprocdef = procdef.copy
+  kernelprocdef[0] = if procdef[0].kind == nnkPostfix:
+                       kernelprocname.postfix("*")
+                     else:
+                       kernelprocname
+  kernelprocdef[6] = convertToCLProc(procdef[6])
+  result = quote do:
+    static:
+      inKernel = false
+    `procdef`
+    static:
+      inKernel = true
+    `kernelprocdef`
+    static:
+      inKernel = false
