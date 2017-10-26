@@ -1,7 +1,7 @@
 
 import unittest
-import nim2cl
-import nim2cl.math
+include nim2cl
+import nim2cl.vector
 
 proc vartest() =
   var x = 1
@@ -21,7 +21,7 @@ __kernel void fortest() {
     int i = 0;
     {
       while ((i < 10)) {
-        i = i;
+        int i = i;
         int a = i;
         i += 1;
       }
@@ -38,12 +38,45 @@ __kernel void fortest2() {
   int n = 10;
   {
     int i;
-    int res0 = ((int)(-n));
+    int tmp = (-n);
+    int res = ((int)tmp);
     {
-      while ((res0 <= ((int)n))) {
-        i = res0;
+      while ((res <= ((int)n))) {
+        int i = res;
         int a = i;
-        res0 += 1;
+        res += 1;
+      }
+    };
+  };
+}"""
+
+proc fortest3() =
+  var n = 10
+  for i in -n..n:
+    for j in -n..n:
+      discard
+const fortest3Src = """
+__kernel void fortest3() {
+  int n = 10;
+  {
+    int i;
+    int tmp = (-n);
+    int res = ((int)tmp);
+    {
+      while ((res <= ((int)n))) {
+        int i = res;
+        {
+          int j;
+          int tmp = (-n);
+          int res = ((int)tmp);
+          {
+            while ((res <= ((int)n))) {
+              int j = res;
+              res += 1;
+            }
+          };
+        };
+        res += 1;
       }
     };
   };
@@ -76,7 +109,7 @@ __kernel void iftest() {
   int y = _nim2cl_tmp0;
 }"""
 
-proc add5(x: float): float =
+proc add5(x: float): float=
   return x + 5.0
 proc proctest() =
   discard add5(1.0)
@@ -165,7 +198,7 @@ typedef struct {
   int x;
   int y;
 } MyInt;
-MyInt infix__0(MyInt left, MyInt right) {
+MyInt add__0(MyInt left, MyInt right) {
   MyInt result;
   result.x = (left.x + right.x);
   result.y = (left.y + right.y);
@@ -174,7 +207,14 @@ MyInt infix__0(MyInt left, MyInt right) {
 __kernel void externalinfixtest() {
   MyInt left;
   MyInt right;
-  infix__0(left, right);
+  add__0(left, right);
+}"""
+
+proc modtest() =
+  discard 1.0 mod 0.1
+const modtestSrc = """
+__kernel void modtest() {
+  fmod(1.0, 0.1);
 }"""
 
 defineProgram forandvar:
@@ -190,7 +230,7 @@ __kernel void fortest() {
     int i = 0;
     {
       while ((i < 10)) {
-        i = i;
+        int i = i;
         int a = i;
         i += 1;
       }
@@ -199,25 +239,15 @@ __kernel void fortest() {
 }"""
 
 proc primitivetest() =
-  discard math.min(1.0, 2.0)
-  discard math.max(1.0'f32, 2.0'f32)
-  discard math.min(1.0, 2.0)
-  discard math.max(1.0'f32, 2.0'f32)
-  discard math.abs(1)
-  discard math.abs(1.0)
-  discard math.abs(1.0'f32)
-  printf("Hello %d!\n", 1, 2)
-  let n = 1
-  printf("Hello %d!\n", n)
-  discard dot(newFloat3(1.0, 1.0, 1.0), newFloat3(1.0, 1.0, 1.0))
+  discard min(1.0, 2.0)
+  discard max(1.0'f32, 2.0'f32)
+  discard min(1.0, 2.0)
+  discard max(1.0'f32, 2.0'f32)
+  discard abs(1)
+  discard abs(1.0)
+  discard abs(1.0'f32)
+  # discard dot(newFloat3(1.0, 1.0, 1.0), newFloat3(1.0, 1.0, 1.0))
 const primitiveSrc = """
-float3 newFloat3__0(float x, float y, float z) {
-  float3 result;
-  result.x = x;
-  result.y = y;
-  result.z = z;
-  return result;
-}
 __kernel void primitivetest() {
   min(1.0, 2.0);
   max(1.0, 2.0);
@@ -226,10 +256,6 @@ __kernel void primitivetest() {
   abs(1);
   fabs(1.0);
   fabs(1.0);
-  printf("Hello %d!\n", 1, 2);
-  int n = 1;
-  printf("Hello %d!\n", n);
-  dot(newFloat3__0(1.0, 1.0, 1.0), newFloat3__0(1.0, 1.0, 1.0));
 }"""
 
 suite "nim2cl basic test":
@@ -239,6 +265,8 @@ suite "nim2cl basic test":
     check genCLKernelSource(fortest) == fortestSrc
   test "for2":
     check genCLKernelSource(fortest2) == fortest2Src
+  test "for3":
+    check genCLKernelSource(fortest3) == fortest3Src
   test "if":
     check genCLKernelSource(iftest) == iftestSrc
   test "external proc":
@@ -257,6 +285,8 @@ suite "nim2cl basic test":
     check genCLKernelSource(objecttest) == objecttestSrc
   test "external infix":
     check genCLKernelSource(externalinfixtest) == externalinfixSrc
+  test "mod infix":
+    check genCLKernelSource(modtest) == modtestSrc
   test "defineProgram":
     check genProgram(forandvar) == forandvarSrc
   test "primitive":

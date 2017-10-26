@@ -7,22 +7,32 @@ export macros
 export strutils
 export sequtils
 
-var inKernel* {.compileTime.} = false
+proc openclonly*(name: string) = discard # TODO: openclonly
+proc openclproc*(name: string) = discard
+proc openclvarargs*(name: string) = discard
+proc openclprefix*(name: string) = discard
+proc openclinfix*(name: string) = discard
 
-proc openclproc*(name: string = nil) = discard
-proc openclinfix*() = discard
+type
+  ProcType* = enum
+    procBuiltin
+    procPrefix
+    procInfix
+    procNormal
 
 type
   ManglingIndex* = object
     procname*: string
     argtypes*: seq[string]
-    isbuiltin*: bool
+  ManglingData* = object
+    s*: string
+    prockind*: ProcType
   Generator* = ref object
     indentwidth*: int
     currentindentnum*: int
     isFormat*: bool
     objects*: Table[string, bool]
-    manglingprocs*: Table[ManglingIndex, string]
+    manglingprocs*: Table[ManglingIndex, ManglingData]
     manglingcount*: int
     dependsrcs*: seq[string]
     tmpcount*: int
@@ -35,21 +45,57 @@ type
     src: string
     after: string
 
-type
-  ProcType* = enum
-    procNormal
-    procInfix
-    procBuiltin
-
 proc removePostfix*(n: NimNode): NimNode =
   if n.kind == nnkPostfix:
     n[1]
   else:
     n
+    
+proc toPrimName*(s: string): string =
+  case s
+  of "+":
+    "add"
+  of "-":
+    "sub"
+  of "*":
+    "mul"
+  of "/":
+    "div"
+  of "%":
+    "perc"
+  of "+=":
+    "addset"
+  of "-=":
+    "subset"
+  of "*=":
+    "mulset"
+  of "/=":
+    "divset"
+  of "<":
+    "less"
+  of ">":
+    "greater"
+  of "<=":
+    "lesseq"
+  of ">=":
+    "greatereq"
+  of "==":
+    "equal"
+  of "!=":
+    "notequal"
+  of "..":
+    "range"
+  of "..<":
+    "rangeless"
+  else:
+    s
 
 proc newManglingIndex*(procname: string, argtypes: seq[string]): ManglingIndex =
   result.procname = procname
   result.argtypes = argtypes
+proc initManglingData*(name: string, prockind: ProcType): ManglingData =
+  result.s = name
+  result.prockind = prockind
 
 proc hash*(manglingindex: ManglingIndex): Hash =
   var arr = @[manglingindex.procname]
@@ -63,7 +109,7 @@ proc newGenerator*(isFormat = true, indentwidth = 2): Generator =
   result.currentindentnum = 0
   result.isFormat = isFormat
   result.objects = initTable[string, bool]()
-  result.manglingprocs = initTable[ManglingIndex, string]()
+  result.manglingprocs = initTable[ManglingIndex, ManglingData]()
   result.manglingcount = 0
   result.dependsrcs = @[]
   result.tmpcount = 0
@@ -98,15 +144,11 @@ template withRes*(generator: Generator, body: untyped) =
 
 proc genManglingName*(generator: Generator, manglingindex: ManglingIndex): string =
   if generator.manglingprocs.hasKey(manglingindex):
-    result = generator.manglingprocs[manglingindex]
+    result = generator.manglingprocs[manglingindex].s
   else:
-    let name = case manglingindex.procname
-      of "+", "-", "*", "/", "%", "<", ">", "<=", ">=", "==", "[]", "[]=":
-        "infix"
-      else:
-        manglingindex.procname
+    let name = manglingindex.procname.toPrimName
     result = name & "_" & manglingindex.argtypes.join("_") & "_" & $generator.manglingcount
-    generator.manglingprocs[manglingindex] = result
+    generator.manglingprocs[manglingindex] = initManglingData(result, procNormal)
     generator.manglingcount += 1
 
 proc newCompSrc*(generator: Generator): CompSrc =
@@ -148,6 +190,9 @@ proc genStmtList*(generator: Generator, n: NimNode, r: var CompSrc)
 proc genProcDef*(generator: Generator, n: NimNode, r: var CompSrc, isKernel = false, mangling = false)
 proc genType*(generator: Generator, t: NimNode, r: var CompSrc)
 proc genTypeFromVal*(generator: Generator, t: NimNode, r: var CompSrc)
+proc genCall*(generator: Generator, n: NimNode, r: var CompSrc)
+proc genSym*(generator: Generator, n: NimNode, r: var CompSrc)
+proc genProcSym*(generator: Generator, n: NimNode): ManglingData
 
 proc isPrimitiveType(name: string): bool =
   case name
@@ -233,10 +278,7 @@ proc genTypeFromVal*(generator: Generator, t: NimNode, r: var CompSrc) =
   genType(generator, getTypeInst(t), r)
 
 proc genLetElem*(generator: Generator, e: NimNode, r: var CompSrc) =
-  let name = if $e[0] == "res":
-                generator.currentresname
-              else:
-                $e[0]
+  let name = $e[0]
   let typ = e[1]
   let val = e[2]
 
@@ -263,22 +305,16 @@ proc genLetSection*(generator: Generator, n: NimNode, r: var CompSrc) =
       r &= letcomp
 
 proc genAsgn*(generator: Generator, n: NimNode, r: var CompSrc) =
-  if n[0].repr == ":tmp":
-    generator.currenttmp = newCompSrc(generator)
-    gen(generator, n[1], generator.currenttmp)
-  else:
-    gen(generator, n[0], r)
-    r &= " = "
-    gen(generator, n[1], r)
+  gen(generator, n[0], r)
+  r &= " = "
+  gen(generator, n[1], r)
 
 proc genFastAsgn*(generator: Generator, n: NimNode, r: var CompSrc) =
-  if n[0].repr == ":tmp":
-    generator.currenttmp = newCompSrc(generator)
-    gen(generator, n[1], generator.currenttmp)
-  else:
-    gen(generator, n[0], r)
-    r &= " = "
-    gen(generator, n[1], r)
+  genType(generator, getTypeInst(n[1]), r)
+  r &= " "
+  gen(generator, n[0], r)
+  r &= " = "
+  gen(generator, n[1], r)
 
 proc isPrimitiveInfix*(generator: Generator, n: NimNode, r: var CompSrc): bool =
   let
@@ -286,7 +322,7 @@ proc isPrimitiveInfix*(generator: Generator, n: NimNode, r: var CompSrc): bool =
     lefttype = getSrc(genTypeFromVal, generator, n[1])
     righttype = getSrc(genTypeFromVal, generator, n[2])
   case name
-  of "+", "-", "*", "/", "%", "+=", "-=", "*=", "/=", "<", ">", "<=", ">=", "==":
+  of "+", "-", "*", "/", "+=", "-=", "*=", "/=", "<", ">", "<=", ">=", "==":
     if lefttype == "float" and righttype == "float":
       return true
     elif lefttype == "float" and righttype == "double":
@@ -299,6 +335,11 @@ proc isPrimitiveInfix*(generator: Generator, n: NimNode, r: var CompSrc): bool =
       return true
     else:
       return false
+  of "mod":
+    if lefttype == "int" and righttype == "int":
+      return true
+    else:
+      return false
   else:
     return false
 
@@ -306,7 +347,10 @@ proc genInfix*(generator: Generator, n: NimNode, r: var CompSrc) =
   if isPrimitiveInfix(generator, n, r):
     r &= "("
     gen(generator, n[1], r)
-    r &= " $# " % $n[0]
+    if $n[0] == "mod":
+      r &= " % "
+    else:
+      r &= " $# " % $n[0]
     gen(generator, n[2], r)
     r &= ")"
   elif $n[0] == "and":
@@ -322,12 +366,7 @@ proc genInfix*(generator: Generator, n: NimNode, r: var CompSrc) =
     gen(generator, n[2], r)
     r &= ")"
   else:
-    gen(generator, n[0], r)
-    r &= "("
-    gen(generator, n[1], r)
-    r &= ", "
-    gen(generator, n[2], r)
-    r &= ")"
+    genCall(generator, n, r)
 
 proc genPrefix*(generator: Generator, n: NimNode, r: var CompSrc) =
   r &= "("
@@ -403,22 +442,33 @@ proc genCall*(generator: Generator, n: NimNode, r: var CompSrc) =
   if isPrimitiveCall(n):
     genPrimitiveCall(generator, n, r)
   else:
-    let manglingindex = getManglingIndexFromCall(generator, n)
-    let nilindex = newManglingIndex($n[0], @[])
-    if generator.manglingprocs.hasKey(nilindex):
-      r &= generator.manglingprocs[nilindex]
-    elif generator.manglingprocs.hasKey(manglingindex):
-      r &= generator.manglingprocs[manglingindex]
+    let data = genProcSym(generator, n[0])
+    case data.prockind
+    of procPrefix:
+      r &= "("
+      r &= data.s
+      r &= "("
+      gen(generator, n[1], r)
+      r &= ")"
+      r &= ")"
+    of procInfix:
+      r &= "("
+      gen(generator, n[1], r)
+      r &= " "
+      r &= data.s
+      r &= " "
+      gen(generator, n[2], r)
+      r &= ")"
     else:
-      gen(generator, n[0], r)
-    r &= "("
-    var args = newSeq[string]()
-    for i in 1..<n.len:
-      var comp = newCompSrc(generator)
-      gen(generator, n[i], comp)
-      args.add($comp)
-    r &= args.join(", ")
-    r &= ")"
+      r &= data.s
+      r &= "("
+      var args = newSeq[string]()
+      for i in 1..<n.len:
+        var comp = newCompSrc(generator)
+        gen(generator, n[i], comp)
+        args.add($comp)
+      r &= args.join(", ")
+      r &= ")"
 
 proc genWhileStmt*(generator: Generator, n: NimNode, r: var CompSrc) =
   var condcomp = newCompSrc(generator)
@@ -529,7 +579,7 @@ proc genStmtListBody*(generator: Generator, n: NimNode, r: var CompSrc) =
       r &= comp.after
 
 proc genStmtListInside*(generator: Generator, n: NimNode, r: var CompSrc) =
-  if n.len >= 2 and n[0].kind == nnkVarSection and n[1].kind == nnkBlockStmt and n[1][1].kind == nnkWhileStmt:
+  if n.len >= 2 and n[0].kind == nnkVarSection and n[1].kind == nnkBlockStmt and n[1].len >= 2 and n[1][1].kind == nnkWhileStmt:
     generator.withRes:
       genStmtListBody(generator, n, r)
   else:
@@ -580,23 +630,25 @@ proc getManglingIndex*(n: NimNode): ManglingIndex =
       for j in 0..<argtypes.len-2:
         result.argtypes.add(argtypes[i][^2].repr.replace(" ", ""))
 
-proc genSym*(generator: Generator, n: NimNode, r: var CompSrc) =
+proc genProcSym*(generator: Generator, n: NimNode): ManglingData =
+  n.expectKind(nnkSym)
   let impl = n.symbol.getImpl()
-  if impl.kind == nnkProcDef:
-    let manglingindex = getManglingIndex(impl)
-    if generator.manglingprocs.hasKey(manglingindex):
-      r &= generator.manglingprocs[manglingindex]
-    else:
-      generator.reset:
-        var proccomp = newCompSrc(generator)
-        genProcDef(generator, impl, proccomp, mangling = true)
-        if $proccomp != "":
-          generator.dependsrcs.add($proccomp)
-        r &= genManglingName(generator, manglingindex)
-  elif $n == ":tmp":
-    r &= generator.currenttmp
-  elif $n == "res":
-    r &= generator.currentresname
+  impl.expectKind(nnkProcDef)
+
+  let manglingindex = getManglingIndex(impl)
+  if generator.manglingprocs.hasKey(manglingindex):
+    result = generator.manglingprocs[manglingindex]
+  else:
+    generator.reset:
+      var proccomp = newCompSrc(generator)
+      genProcDef(generator, impl, proccomp, mangling = true)
+      if $proccomp != "":
+        generator.dependsrcs.add($proccomp)
+      result = generator.manglingprocs[manglingindex]
+
+proc genSym*(generator: Generator, n: NimNode, r: var CompSrc) =
+  if $n == ":tmp":
+    r &= "tmp"
   else:
     r &= $n
 
@@ -697,17 +749,27 @@ proc genBuiltinProc*(generator: Generator, n: NimNode, r: var CompSrc) =
   let first = if n.body.kind == nnkStmtList: n.body[0] else: n.body
   let builtinname = if first.len == 1: $n[0] else: first[1].strval
   var manglingindex = getManglingIndex(n)
-  generator.manglingprocs[manglingindex] = builtinname
+  generator.manglingprocs[manglingindex] = initManglingData(builtinname, procBuiltin)
+
+proc genBuiltinPrefix*(generator: Generator, n: NimNode, r: var CompSrc) =
+  let first = if n.body.kind == nnkStmtList: n.body[0] else: n.body
+  let builtinname = if first.len == 1: $n[0] else: first[1].strval
+  var manglingindex = getManglingIndex(n)
+  generator.manglingprocs[manglingindex] = initManglingData(builtinname, procPrefix)
 
 proc genBuiltinInfix*(generator: Generator, n: NimNode, r: var CompSrc) =
+  let first = if n.body.kind == nnkStmtList: n.body[0] else: n.body
+  let builtinname = if first.len == 1: $n[0] else: first[1].strval
   var manglingindex = getManglingIndex(n)
-  generator.manglingprocs[manglingindex] = $n[0]
+  generator.manglingprocs[manglingindex] = initManglingData(builtinname, procInfix)
 
 proc getProcType*(n: NimNode): ProcType =
   let first = if n.body.kind == nnkStmtList: n.body[0] else: n.body
-  if first.kind == nnkCall and $first[0] == "openclproc":
+  if first.kind in nnkCallKinds and $first[0] == "openclproc":
     return procBuiltin
-  elif first.kind == nnkCall and $first[0] == "openclinfix":
+  elif first.kind in nnkCallKinds and $first[0] == "openclprefix":
+    return procPrefix
+  elif first.kind in nnkCallKinds and $first[0] == "openclinfix":
     return procInfix
   else:
     return procNormal
@@ -716,6 +778,9 @@ proc genProcDef*(generator: Generator, n: NimNode, r: var CompSrc, isKernel = fa
   case getProcType(n)
   of procBuiltin:
     genBuiltinProc(generator, n, r)
+    return
+  of procPrefix:
+    genBuiltinPrefix(generator, n, r)
     return
   of procInfix:
     genBuiltinInfix(generator, n, r)
@@ -731,7 +796,10 @@ proc genProcDef*(generator: Generator, n: NimNode, r: var CompSrc, isKernel = fa
     let manglingindex = getManglingIndex(n)
     r &= genManglingName(generator, manglingindex)
   else:
-    r &= $n[0]
+    if ($n[0]).endsWith("Kernel"):
+      r &= ($n[0])[0..^("Kernel".len+1)]
+    else:
+      r &= $n[0]
   r &= "("
   genArgTypes(generator, n[3], r)
   r &= ") {\n"
@@ -749,7 +817,6 @@ proc genProcDef*(generator: Generator, n: NimNode, r: var CompSrc, isKernel = fa
 #
 
 macro genCLKernelSourceMacro*(procname: typed): untyped =
-  # echo procname.symbol.getImpl().treerepr
   let generator = newGenerator()
   var comp = newCompSrc(generator)
   genProcDef(generator, procname.symbol.getImpl(), comp, isKernel = true)
@@ -757,7 +824,7 @@ macro genCLKernelSourceMacro*(procname: typed): untyped =
   srcs.add($comp)
   result = newStrLitNode(srcs.join("\n"))
 template genCLKernelSource*(procname: untyped): untyped =
-  genCLKernelSourceMacro(`procname Kernel`)
+  genCLKernelSourceMacro(procname)
 
 macro defineProgram*(name: untyped, body: untyped): untyped =
   name.expectKind(nnkIdent)
@@ -781,88 +848,3 @@ macro defineProgram*(name: untyped, body: untyped): untyped =
 
 template genProgram*(programname: untyped): string =
   `gen programname`()
-
-proc convertToCLProc*(node: NimNode): NimNode {.compileTime.} =
-  if node.kind in AtomicNodes:
-    result = node
-  elif node.kind == nnkWhenStmt:
-    result = nnkWhenStmt.newTree()
-    for branch in node.children:
-      if branch.kind == nnkElifBranch:
-        var branchcopy = branch.copy
-        branchcopy[1] = convertToCLProc(branch[1])
-        result.add(branchcopy)
-      else:
-        result.add(branch)
-  elif node.kind in nnkCallKinds:
-    if node[0].kind == nnkDotExpr:
-      result = node.kind.newTree(nnkDotExpr.newTree(node[0][0], ident($node[0][1] & "CLProc")))
-    else:
-      if $node[0] == "openclproc":
-        result = node.kind.newTree(node[0])
-      else:
-        result = node.kind.newTree(ident($node[0] & "CLProc"))
-    for i in 1..<node.len:
-      result.add(convertToCLProc(node[i]))
-  else:
-    result = node.kind.newTree()
-    for e in node.children:
-      result.add(convertToCLProc(e))
-
-macro clproconly*(procdef: untyped): untyped =
-  let clprocname = ident($procdef[0].removePostfix() & "CLProc")
-  var clprocdef = procdef.copy
-  clprocdef[0] = if procdef[0].kind == nnkPostfix:
-                       clprocname.postfix("*")
-                     else:
-                       clprocname
-  clprocdef[6] = convertToCLProc(procdef[6])
-  result = quote do:
-    static:
-      inKernel = true
-    `clprocdef`
-    static:
-      inKernel = false
-  echo result.repr
-
-macro implCLMacro*(macroname: untyped): untyped =
-  let clprocid = ident($macroname & "CLProc").postfix("*")
-  result = quote do:
-    template `clprocid`(args: varargs[untyped]): untyped =
-      `macroname`(args)
-
-macro clproc*(procdef: untyped): untyped =
-  let clprocname = ident($procdef[0].removePostfix() & "CLProc")
-  var clprocdef = procdef.copy
-  clprocdef[0] = if procdef[0].kind == nnkPostfix:
-                       clprocname.postfix("*")
-                     else:
-                       clprocname
-  clprocdef[6] = convertToCLProc(procdef[6])
-  result = quote do:
-    static:
-      inKernel = false
-    `procdef`
-    static:
-      inKernel = true
-    `clprocdef`
-    static:
-      inKernel = false
-
-macro kernel*(procdef: untyped): untyped =
-  let kernelprocname = ident($procdef[0].removePostfix() & "Kernel")
-  var kernelprocdef = procdef.copy
-  kernelprocdef[0] = if procdef[0].kind == nnkPostfix:
-                       kernelprocname.postfix("*")
-                     else:
-                       kernelprocname
-  kernelprocdef[6] = convertToCLProc(procdef[6])
-  result = quote do:
-    static:
-      inKernel = false
-    `procdef`
-    static:
-      inKernel = true
-    `kernelprocdef`
-    static:
-      inKernel = false

@@ -2,6 +2,7 @@
 import macros, macro_utils
 import strutils, sequtils
 import opencl_generator
+import math
 
 type
   float2* = object
@@ -26,25 +27,22 @@ type
   private*[T] = T
   constant*[T] = T
 
+#
+# Primitive
+#
+
 var currentGlobalID = @[0]
 var currentLocalID = @[0]
 
-proc getGlobalID*(index: int): int {.clproc.} =
+proc getGlobalID*(index: int): int =
   openclproc("get_global_id")
   return currentGlobalID[index]
 proc getLocalID*(index: int): int =
   openclproc("get_global_id")
   return currentLocalID[index]
 
-proc rawprintf*(s: cstring) {.importc: "printf", header: "stdio.h", varargs.}
-proc printf*(s: string, args: varargs[string, `$`]) {.clproc.} =
-  when not inKernel:
-    rawprintf(s, args)
-
-#
-# constructors
-#
-
+proc printfCLProc*(s: cstring) {.importc: "printf", header: "stdio.h", varargs.}
+    
 proc newFloat2*(x, y: float32): float2 =
   result.x = x
   result.y = y
@@ -57,6 +55,14 @@ proc newFloat4*(x, y, z, w: float32): float4 =
   result.y = y
   result.z = z
   result.w = w
+
+template rangeCLProc*(a, b: untyped): auto = a..b
+template rangelessCLProc*(a, b: untyped): auto = a..<b
+
+proc incCLProc*(x: var int) = x.inc
+proc decCLProc*(x: var int) = x.dec
+proc incCLProc*(x: var int, y: int) = x += y
+proc decCLProc*(x: var int, y: int) = x -= y
 
 #
 # CL Type Generator
@@ -74,14 +80,20 @@ macro implCLType*(T: typed): untyped =
       return cast[ptr array[0, `T`]](parray)[index]
   )
 
+template implPrimitive*(name: string, e: untyped): auto =
+  openclproc(name)
+  e
+template implPrimitiveCLProc*(name: string, e: untyped) = implPrimitive(name, e)
+
 implCLType(float32)
-implCLType(float2)
-implCLType(float3)
-implCLType(float4)
 implCLType(int32)
 implCLType(int)
 implCLType(char)
 implCLType(byte)
+
+implCLType(float2)
+implCLType(float3)
+implCLType(float4)
 
 #
 # Emulator
