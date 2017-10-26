@@ -316,11 +316,16 @@ proc genAsgn*(generator: Generator, n: NimNode, r: var CompSrc) =
   gen(generator, n[1], r)
 
 proc genFastAsgn*(generator: Generator, n: NimNode, r: var CompSrc) =
-  genType(generator, getTypeInst(n[1]), r)
-  r &= " "
-  gen(generator, n[0], r)
-  r &= " = "
-  gen(generator, n[1], r)
+  if n[0].repr == ":tmp":
+    genType(generator, getTypeInst(n[1]), r)
+    r &= " "
+    gen(generator, n[0], r)
+    r &= " = "
+    gen(generator, n[1], r)
+  else:
+    gen(generator, n[0], r)
+    r &= " = "
+    gen(generator, n[1], r)
 
 proc isPrimitiveInfix*(generator: Generator, n: NimNode, r: var CompSrc): bool =
   let
@@ -802,10 +807,7 @@ proc genProcDef*(generator: Generator, n: NimNode, r: var CompSrc, isKernel = fa
     let manglingindex = getManglingIndex(n)
     r &= genManglingName(generator, manglingindex)
   else:
-    if ($n[0]).endsWith("Kernel"):
-      r &= ($n[0])[0..^("Kernel".len+1)]
-    else:
-      r &= $n[0]
+    r &= $n[0]
   r &= "("
   genArgTypes(generator, n[3], r)
   r &= ") {\n"

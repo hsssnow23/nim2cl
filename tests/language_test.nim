@@ -21,7 +21,7 @@ __kernel void fortest() {
     int i = 0;
     {
       while ((i < 10)) {
-        int i = i;
+        i = i;
         int a = i;
         i += 1;
       }
@@ -42,7 +42,7 @@ __kernel void fortest2() {
     int res = ((int)tmp);
     {
       while ((res <= ((int)n))) {
-        int i = res;
+        i = res;
         int a = i;
         res += 1;
       }
@@ -64,14 +64,14 @@ __kernel void fortest3() {
     int res = ((int)tmp);
     {
       while ((res <= ((int)n))) {
-        int i = res;
+        i = res;
         {
           int j;
           int tmp = (-n);
           int res = ((int)tmp);
           {
             while ((res <= ((int)n))) {
-              int j = res;
+              j = res;
               res += 1;
             }
           };
@@ -230,7 +230,7 @@ __kernel void fortest() {
     int i = 0;
     {
       while ((i < 10)) {
-        int i = i;
+        i = i;
         int a = i;
         i += 1;
       }
