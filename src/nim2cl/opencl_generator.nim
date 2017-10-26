@@ -7,11 +7,17 @@ export macros
 export strutils
 export sequtils
 
-proc openclonly*(name: string) = discard # TODO: openclonly
-proc openclproc*(name: string) = discard
-proc openclvarargs*(name: string) = discard
-proc openclprefix*(name: string) = discard
-proc openclinfix*(name: string) = discard
+type
+  PrimitiveError* = object of Exception
+
+proc primerror*(name: string) =
+  raise newException(PrimitiveError, "shouldn't be call opencl primitive proc by CPU: $#" % name)
+
+proc openclonly*(name: string) = primerror(name) # TODO: openclonly
+proc openclproc*(name: string) = primerror(name)
+proc openclvarargs*(name: string) = primerror(name)
+proc openclprefix*(name: string) = primerror(name)
+proc openclinfix*(name: string) = primerror(name)
 
 type
   ProcType* = enum
