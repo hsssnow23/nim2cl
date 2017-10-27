@@ -74,9 +74,9 @@ macro implCLType*(T: typed): untyped =
   let setop = !"[]="
   let accessop = !"[]"
   result.add(quote do:
-    proc `setop`*(parray: ptr `T`, index: int, value: `T`) =
+    proc `setop`*(parray: global[ptr `T`], index: int, value: `T`) =
       cast[ptr array[0, `T`]](parray)[index] = value
-    proc `accessop`*(parray: ptr `T`, index: int): var `T` =
+    proc `accessop`*(parray: global[ptr `T`], index: int): var `T` =
       return cast[ptr array[0, `T`]](parray)[index]
   )
 
@@ -86,8 +86,10 @@ template implPrimitive*(name: string, e: untyped): auto =
 template implPrimitiveCLProc*(name: string, e: untyped) = implPrimitive(name, e)
 
 implCLType(float32)
-implCLType(int32)
+implCLType(float64)
 implCLType(int)
+implCLType(int32)
+implCLType(int64)
 implCLType(char)
 implCLType(byte)
 

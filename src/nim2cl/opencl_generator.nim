@@ -336,56 +336,73 @@ proc genFastAsgn*(generator: Generator, n: NimNode, r: var CompSrc) =
     gen(generator, n[1], r)
 
 proc isPrimitiveType*(generator: Generator, n: NimNode): bool =
-  let t = getTypeInst(n).repr
-  case t
+  let t = getTypeInst(n)
+  let primt = case t.kind
+              of nnkBracketExpr:
+                t[1]
+              else:
+                t
+  case primt.repr
   of "int", "int32", "int64", "float", "float32", "float64":
     return true
   else:
     return false
-proc isPrimitivePointer*(generator: Generator, n: NimNode): bool =
-  let t = getTypeInst(n).repr
-  case t
-  of "ptr int", "ptr int32", "ptr int64", "ptr float", "ptr float32", "ptr float64":
+proc isPrimitiveVec*(generator: Generator, n: NimNode): bool =
+  let t = getTypeInst(n)
+  let primt = case t.kind
+              of nnkBracketExpr:
+                t[1]
+              else:
+                t
+  case primt.repr
+  of "float2", "float3", "float4":
     return true
   else:
     return false
-
-proc isPrimitiveInfix*(generator: Generator, n: NimNode, r: var CompSrc): bool =
-  let
-    name = $n[0]
-    lefttype = getSrc(genTypeFromVal, generator, n[1])
-    righttype = getSrc(genTypeFromVal, generator, n[2])
-  case name
+proc isPrimitiveTypeWithVec*(generator: Generator, n: NimNode): bool =
+  isPrimitiveType(generator, n) or isPrimitiveVec(generator, n)
+proc isPrimitivePointer*(generator: Generator, n: NimNode): bool =
+  let t = getTypeInst(n)
+  if t.kind == nnkBracketExpr and $t[0] == "global" and t[1].kind == nnkPtrTy and isPrimitiveTypeWithVec(generator, t[1][0]):
+    return true
+  else:
+    return false
+    
+proc isPrimitiveCall*(generator: Generator, n: NimNode): bool =
+  case $n[0]
   of "+", "-", "*", "/", "+=", "-=", "*=", "/=", "<", ">", "<=", ">=", "==":
     return isPrimitiveType(generator, n[1]) and isPrimitiveType(generator, n[2])
   of "mod":
-    if lefttype == "int" and righttype == "int":
+    if getTypeInst(n[1]).repr == "int" and getTypeInst(n[2]).repr == "int":
       return true
     else:
       return false
+  of "and", "or":
+    if getTypeInst(n[1]).repr == "bool" and getTypeInst(n[2]).repr == "bool":
+      return true
+    else:
+      return false
+  of "inc", "dec":
+    return isPrimitiveType(generator, n[1])
+  of "[]":
+    return isPrimitivePointer(generator, n[1])
+  of "[]=":
+    return isPrimitivePointer(generator, n[1]) and isPrimitiveType(generator, n[2])
   else:
     return false
 
 proc genInfix*(generator: Generator, n: NimNode, r: var CompSrc) =
-  if isPrimitiveInfix(generator, n, r):
+  if isPrimitiveCall(generator, n):
     r &= "("
     gen(generator, n[1], r)
     if $n[0] == "mod":
       r &= " % "
+    elif $n[0] == "and":
+      r &= " && "
+    elif $n[0] == "or":
+      r &= " || "
     else:
       r &= " $# " % $n[0]
-    gen(generator, n[2], r)
-    r &= ")"
-  elif $n[0] == "and":
-    r &= "("
-    gen(generator, n[1], r)
-    r &= " && "
-    gen(generator, n[2], r)
-    r &= ")"
-  elif $n[0] == "or":
-    r &= "("
-    gen(generator, n[1], r)
-    r &= " || "
     gen(generator, n[2], r)
     r &= ")"
   else:
@@ -408,17 +425,6 @@ proc genDotExpr*(generator: Generator, n: NimNode, r: var CompSrc) =
   gen(generator, n[0], r)
   r &= "."
   gen(generator, n[1], r)
-
-proc isPrimitiveCall*(generator: Generator, n: NimNode): bool =
-  let name = $n[0]
-  if name == "inc" or name == "dec":
-    return isPrimitiveType(generator, n[1])
-  elif name == "[]":
-    return isPrimitivePointer(generator, n[1])
-  elif name == "[]=":
-    return isPrimitivePointer(generator, n[1]) and isPrimitiveType(generator, n[2])
-  else:
-    return false
 
 proc genPrimitiveCall*(generator: Generator, n: NimNode, r: var CompSrc) =
   let name = $n[0]
@@ -708,6 +714,11 @@ proc genCast*(generator: Generator, n: NimNode, r: var CompSrc) =
   gen(generator, n[1], r)
   r &= ")"
 
+proc genAddr*(generator: Generator, n: NimNode, r: var CompSrc) =
+  r &= "(&"
+  genType(generator, n[0], r)
+  r &= ")"
+
 proc gen*(generator: Generator, n: NimNode, r: var CompSrc) =
   case n.kind
   of nnkLetSection, nnkVarSection: genLetSection(generator, n, r)
@@ -736,6 +747,7 @@ proc gen*(generator: Generator, n: NimNode, r: var CompSrc) =
   of nnkHiddenCallConv: genHiddenCallConv(generator, n, r)
   of nnkDiscardStmt: genDiscardStmt(generator, n, r)
   of nnkCast: genCast(generator, n, r)
+  of nnkAddr: genAddr(generator, n, r)
   of nnkCommentStmt, nnkEmpty: discard
   else:
     error("($#) $# is unsupported NimNode: $#" % [n.lineinfo, $n.kind, n.repr], n)

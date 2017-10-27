@@ -1,7 +1,6 @@
 
 import unittest
 include nim2cl
-import nim2cl.vector
 
 proc vartest() =
   var x = 1
@@ -10,6 +9,15 @@ const vartestSrc = """
 __kernel void vartest() {
   int x = 1;
   x = 5;
+}"""
+
+proc builtintest() =
+  var x = 1
+  discard addr x
+const builtintestSrc = """
+__kernel void builtintest() {
+  int x = 1;
+  (&x);
 }"""
 
 proc fortest() =
@@ -136,9 +144,29 @@ __kernel void convtest() {
 }"""
 
 proc ptrtest(vals: global[ptr float]) =
-  discard
+  discard vals[0]
+  vals[0] = 1.0
 const ptrtestSrc = """
 __kernel void ptrtest(__global float* vals) {
+  vals[0];
+  vals[0] = 1.0;
+}"""
+
+proc ptrvectest(vals: global[ptr float4]) =
+  discard vals[0]
+  vals[0] = newFloat4(1.0, 1.0, 1.0, 1.0)
+const ptrvectestSrc = """
+float4 newFloat4__0(float x, float y, float z, float w) {
+  float4 result;
+  result.x = x;
+  result.y = y;
+  result.z = z;
+  result.w = w;
+  return result;
+}
+__kernel void ptrvectest(__global float4* vals) {
+  vals[0];
+  vals[0] = newFloat4__0(1.0, 1.0, 1.0, 1.0);
 }"""
 
 proc casttest() =
@@ -151,21 +179,14 @@ __kernel void casttest() {
 }"""
 
 proc brackettest() =
-  var xs: ptr int
+  var xs: global[ptr int]
   var first = xs[0]
   xs[0] = 9
 const brackettestSrc = """
 __kernel void brackettest() {
-  int* xs;
+  __global int* xs;
   int first = xs[0];
   xs[0] = 9;
-}"""
-
-proc builtintest() =
-  let i = getGlobalID(0)
-const builtintestSrc = """
-__kernel void builtintest() {
-  int i = get_global_id(0);
 }"""
 
 type MyInt = object
@@ -239,6 +260,7 @@ __kernel void fortest() {
 }"""
 
 proc primitivetest() =
+  discard getGlobalID(0)
   discard min(1.0, 2.0)
   discard max(1.0'f32, 2.0'f32)
   discard min(1.0, 2.0)
@@ -246,9 +268,9 @@ proc primitivetest() =
   discard abs(1)
   discard abs(1.0)
   discard abs(1.0'f32)
-  # discard dot(newFloat3(1.0, 1.0, 1.0), newFloat3(1.0, 1.0, 1.0))
 const primitiveSrc = """
 __kernel void primitivetest() {
+  get_global_id(0);
   min(1.0, 2.0);
   max(1.0, 2.0);
   min(1.0, 2.0);
@@ -271,6 +293,8 @@ __kernel void atomictest(__global float* dest) {
 suite "nim2cl basic test":
   test "var":
     check genCLKernelSource(vartest) == vartestSrc
+  test "builtin":
+    check genCLKernelSource(builtintest) == builtintestSrc
   test "for":
     check genCLKernelSource(fortest) == fortestSrc
   test "for2":
@@ -285,12 +309,12 @@ suite "nim2cl basic test":
     check genCLKernelSource(convtest) == convtestSrc
   test "ptr":
     check genCLKernelSource(ptrtest) == ptrtestSrc
+  test "ptrvec":
+    check genCLKernelSource(ptrvectest) == ptrvectestSrc
   test "cast":
     check genCLKernelSource(casttest) == casttestSrc
   test "bracket expr":
     check genCLKernelSource(brackettest) == brackettestSrc
-  test "builtin":
-    check genCLKernelSource(builtintest) == builtintestSrc
   test "object":
     check genCLKernelSource(objecttest) == objecttestSrc
   test "external infix":
