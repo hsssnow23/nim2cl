@@ -93,6 +93,10 @@ proc toPrimName*(s: string): string =
     "range"
   of "..<":
     "rangeless"
+  of "[]":
+    "ptrget"
+  of "[]=":
+    "ptrset"
   else:
     s
 
@@ -245,6 +249,10 @@ proc genType*(generator: Generator, t: NimNode, r: var CompSrc) =
     r &= "*"
   elif t.kind == nnkBracketExpr:
     case $t[0]
+    of "Atomic":
+      r &= "__global "
+      genType(generator, t[1], r)
+      r &= "*"
     of "global":
       r &= "__global "
       genType(generator, t[1], r)
@@ -260,7 +268,7 @@ proc genType*(generator: Generator, t: NimNode, r: var CompSrc) =
     of "var":
       genType(generator, t[1], r)
     else:
-      r &= t.repr
+      r &= $t[0]
   elif t.kind == nnkSym:
     let typeimpl = t.symbol.getImpl()
     if $t == "float64":
@@ -327,6 +335,21 @@ proc genFastAsgn*(generator: Generator, n: NimNode, r: var CompSrc) =
     r &= " = "
     gen(generator, n[1], r)
 
+proc isPrimitiveType*(generator: Generator, n: NimNode): bool =
+  let t = getTypeInst(n).repr
+  case t
+  of "int", "int32", "int64", "float", "float32", "float64":
+    return true
+  else:
+    return false
+proc isPrimitivePointer*(generator: Generator, n: NimNode): bool =
+  let t = getTypeInst(n).repr
+  case t
+  of "ptr int", "ptr int32", "ptr int64", "ptr float", "ptr float32", "ptr float64":
+    return true
+  else:
+    return false
+
 proc isPrimitiveInfix*(generator: Generator, n: NimNode, r: var CompSrc): bool =
   let
     name = $n[0]
@@ -334,18 +357,7 @@ proc isPrimitiveInfix*(generator: Generator, n: NimNode, r: var CompSrc): bool =
     righttype = getSrc(genTypeFromVal, generator, n[2])
   case name
   of "+", "-", "*", "/", "+=", "-=", "*=", "/=", "<", ">", "<=", ">=", "==":
-    if lefttype == "float" and righttype == "float":
-      return true
-    elif lefttype == "float" and righttype == "double":
-      return true
-    elif lefttype == "double" and righttype == "float":
-      return true
-    elif lefttype == "double" and righttype == "double":
-      return true
-    elif lefttype == "int" and righttype == "int":
-      return true
-    else:
-      return false
+    return isPrimitiveType(generator, n[1]) and isPrimitiveType(generator, n[2])
   of "mod":
     if lefttype == "int" and righttype == "int":
       return true
@@ -397,10 +409,14 @@ proc genDotExpr*(generator: Generator, n: NimNode, r: var CompSrc) =
   r &= "."
   gen(generator, n[1], r)
 
-proc isPrimitiveCall*(n: NimNode): bool =
+proc isPrimitiveCall*(generator: Generator, n: NimNode): bool =
   let name = $n[0]
-  if name == "inc" or name == "dec" or name == "[]" or name == "[]=":
-    return true
+  if name == "inc" or name == "dec":
+    return isPrimitiveType(generator, n[1])
+  elif name == "[]":
+    return isPrimitivePointer(generator, n[1])
+  elif name == "[]=":
+    return isPrimitivePointer(generator, n[1]) and isPrimitiveType(generator, n[2])
   else:
     return false
 
@@ -450,7 +466,7 @@ proc genCall*(generator: Generator, n: NimNode, r: var CompSrc) =
     r &= ")"
     return
 
-  if isPrimitiveCall(n):
+  if isPrimitiveCall(generator, n):
     genPrimitiveCall(generator, n, r)
   else:
     let data = genProcSym(generator, n[0])
@@ -636,10 +652,10 @@ proc getManglingIndex*(n: NimNode): ManglingIndex =
   let argtypes = n[3]
   for i in 1..<argtypes.len:
     if argtypes[i].len == 3:
-      result.argtypes.add(argtypes[i][1].repr.replace(" ", ""))
+      result.argtypes.add(argtypes[i][1].repr.replace(" ", "").replace("[").replace("]"))
     else:
       for j in 0..<argtypes.len-2:
-        result.argtypes.add(argtypes[i][^2].repr.replace(" ", ""))
+        result.argtypes.add(argtypes[i][^2].repr.replace(" ", "").replace("[").replace("]"))
 
 proc genProcSym*(generator: Generator, n: NimNode): ManglingData =
   n.expectKind(nnkSym)

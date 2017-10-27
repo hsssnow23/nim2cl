@@ -258,6 +258,16 @@ __kernel void primitivetest() {
   fabs(1.0);
 }"""
 
+proc atomictest(dest: Atomic[float]) =
+  dest[] = 1.0
+const atomictestSrc = """
+void ptrset_Atomicfloat_float_0(__global float* a, float value) {
+  atomic_xchg(((__global uint*)a), ((uint)value));
+}
+__kernel void atomictest(__global float* dest) {
+  ptrset_Atomicfloat_float_0(dest, 1.0);
+}"""
+
 suite "nim2cl basic test":
   test "var":
     check genCLKernelSource(vartest) == vartestSrc
@@ -291,3 +301,5 @@ suite "nim2cl basic test":
     check genProgram(forandvar) == forandvarSrc
   test "primitive":
     check genCLKernelSource(primitivetest) == primitiveSrc
+  test "atomic":
+    check genCLKernelSource(atomictest) == atomictestSrc

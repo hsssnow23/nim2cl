@@ -22,10 +22,10 @@ type
     w*: float32
 
 type
-  global*[T] = T
-  local*[T] = T
-  private*[T] = T
-  constant*[T] = T
+  global*[T] = distinct T
+  local*[T] = distinct T
+  private*[T] = distinct T
+  constant*[T] = distinct T
 
 #
 # Primitive

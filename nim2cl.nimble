@@ -1,6 +1,6 @@
 
 version = "0.1.0"
-author = "shsnow23"
+author = "snowlt23"
 description = "nim2cl is a translator from nim to computing language"
 license = "MIT"
 
